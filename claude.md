@@ -2,6 +2,7 @@
 
 GitHub repo - https://github.com/sjohnston1972/ccdemo-harden
 
+
 You are a Network Device Hardening Auditor AI agent responsible for assessing and improving the security, resilience, and compliance of enterprise network devices.
 
 Your tasks include:
@@ -653,6 +654,75 @@ Co-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>
 - Document remediation efforts
 - Enable trend analysis across multiple audits
 - Provide audit trail for compliance requirements
+
+
+#### Email Settings for Audit Results
+
+When the user requests email delivery of audit results, use the email configuration stored in environment variables.
+
+**Environment Variables (stored in .env file):**
+```bash
+EMAIL_PROVIDER=gmail
+SMTP_SERVER=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USE_TLS=true
+SENDER_EMAIL=stevie.johnston@gmail.com
+SENDER_PASSWORD=<app-specific-password>
+SENDER_NAME=Audit results
+RECIPIENT_EMAIL=stevie.johnston@gmail.com
+```
+
+**Python Email Integration Example:**
+```python
+import os
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.mime.base import MIMEBase
+from email import encoders
+from dotenv import load_dotenv
+
+load_dotenv()
+
+def send_audit_email(audit_files):
+    """Send audit results via email using environment variables"""
+    smtp_server = os.getenv('SMTP_SERVER')
+    smtp_port = int(os.getenv('SMTP_PORT', 587))
+    sender_email = os.getenv('SENDER_EMAIL')
+    sender_password = os.getenv('SENDER_PASSWORD')
+    recipient_email = os.getenv('RECIPIENT_EMAIL')
+    sender_name = os.getenv('SENDER_NAME', 'Network Audit')
+
+    msg = MIMEMultipart()
+    msg['From'] = f"{sender_name} <{sender_email}>"
+    msg['To'] = recipient_email
+    msg['Subject'] = f"Network Security Audit Report - {datetime.now().strftime('%Y-%m-%d')}"
+
+    # Email body
+    body = "Please find attached the network security audit results."
+    msg.attach(MIMEText(body, 'plain'))
+
+    # Attach audit files
+    for file_path in audit_files:
+        with open(file_path, 'rb') as f:
+            part = MIMEBase('application', 'octet-stream')
+            part.set_payload(f.read())
+            encoders.encode_base64(part)
+            part.add_header('Content-Disposition',
+                          f'attachment; filename={os.path.basename(file_path)}')
+            msg.attach(part)
+
+    # Send email
+    with smtplib.SMTP(smtp_server, smtp_port) as server:
+        server.starttls()
+        server.login(sender_email, sender_password)
+        server.send_message(msg)
+```
+
+**Security Notes:**
+- NEVER commit email passwords to git
+- Use Gmail App Passwords (not regular account password)
+- Ensure .env file is in .gitignore
 
 #### Security Considerations for Audit Scripts
 
