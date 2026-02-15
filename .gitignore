@@ -1,0 +1,27 @@
+# Environment variables with credentials
+.env
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# IDE settings
+.vscode/
+.idea/
+.claude/
+
+# Audit outputs
+audit_report_*.json
+running_config_*.txt
+
+# OS files
+.DS_Store
+Thumbs.db
