@@ -91,6 +91,14 @@ def get_device_info(output):
     return info
 ```
 
+**What to Capture:**
+- Hostname (from config, not "show version")
+- Platform type (IOS/NX-OS/XR)
+- Software version
+- Model/hardware
+- Uptime (for change window planning)
+- Serial number (for asset tracking)
+
 🔹 Security Practices
 
 Never expose credentials in plain text.
@@ -213,6 +221,10 @@ if sys.platform == 'win32':
 **Avoid Unicode Box Characters:**
 - BAD: ╔═══╗ ║ ╚═══╝ (causes UnicodeEncodeError on Windows)
 - GOOD: === --- +++ *** (ASCII-safe alternatives)
+
+**Linux/Mac Compatibility:**
+- Ensure ANSI color codes work in different terminals
+- Test with both bash and zsh shells
 
 🔹 Non-Interactive Mode for Automation
 
@@ -338,6 +350,364 @@ rich → CLI audit dashboards
 
 pandas → Compliance reporting
 
+#### Output Parsing Strategies
+
+🔹 Regex (Simple Checks)
+
+Best for: Single-line matches, boolean checks
+
+```python
+if re.search(r'ip ssh version 2', output, re.IGNORECASE):
+    return True
+```
+
+🔹 TextFSM (Structured Data)
+
+Best for: Complex output, multiple values, tables
+
+**Example: Parsing Interface Status**
+```python
+from textfsm import TextFSM
+import io
+
+template = """
+Value Required INTERFACE (\S+)
+Value STATUS (up|down)
+Value PROTOCOL (up|down)
+
+Start
+  ^${INTERFACE}\s+is\s+${STATUS},\s+line protocol is ${PROTOCOL} -> Record
+"""
+
+with TextFSM(io.StringIO(template)) as fsm:
+    results = fsm.ParseText(output)
+```
+
+**Where to Find Templates:**
+- https://github.com/networktocode/ntc-templates
+- Pre-built for common Cisco commands
+
+🔹 Compliance Check Pattern
+
+```python
+def check_compliance(output, check_config):
+    """Flexible compliance checking"""
+    if 'expected' in check_config:
+        # Simple string match
+        return check_config['expected'].lower() in output.lower()
+
+    elif 'regex' in check_config:
+        # Regex match
+        return bool(re.search(check_config['regex'], output, re.IGNORECASE))
+
+    elif 'custom_function' in check_config:
+        # Complex logic
+        func = getattr(checks_module, check_config['custom_function'])
+        return func(output)
+```
+
+#### Report Export & Formatting
+
+🔹 JSON (Machine-Readable)
+
+Best for: APIs, automation, SIEM integration
+
+```python
+import json
+from datetime import datetime
+
+report = {
+    'timestamp': datetime.now().isoformat(),
+    'device': device_info,
+    'findings': audit_results,
+    'compliance_score': calculate_score(audit_results)
+}
+with open('audit_report.json', 'w') as f:
+    json.dump(report, f, indent=2)
+```
+
+🔹 CSV (Spreadsheet)
+
+Best for: Management reporting, trend analysis
+
+```python
+import csv
+
+with open('audit_findings.csv', 'w', newline='') as f:
+    writer = csv.DictWriter(f, fieldnames=['category', 'check', 'risk', 'passed'])
+    writer.writeheader()
+    writer.writerows(audit_results)
+```
+
+🔹 Markdown (Documentation)
+
+Best for: Git repos, documentation sites
+
+```python
+def export_markdown(device_info, results):
+    """Export audit results as Markdown"""
+    md = f"# Security Audit Report\n\n"
+    md += f"**Device:** {device_info['hostname']}\n"
+    md += f"**Date:** {datetime.now().strftime('%Y-%m-%d')}\n\n"
+    md += f"## Summary\n\n"
+    md += f"- Compliance Score: {calculate_score(results)}%\n\n"
+    md += f"## Findings\n\n"
+
+    for finding in results:
+        if not finding['passed']:
+            md += f"### {finding['name']}\n"
+            md += f"- **Risk:** {finding['risk']}\n"
+            md += f"- **Impact:** {finding['impact']}\n"
+            md += f"- **Recommendation:** {finding['recommendation']}\n\n"
+
+    return md
+```
+
+#### Standard Audit Output Files and Naming Conventions
+
+**CRITICAL:** All audits must follow these standardized file naming conventions to ensure consistency across audits and enable tracking over time.
+
+🔹 Required Files for Every Audit
+
+**1. Main Audit Script**
+- **Filename:** `cisco_audit.py`
+- **Purpose:** Main audit script containing all security checks
+- **Format:** Python script with Rich library for formatted output
+- **Requirements:**
+  - Support `--non-interactive` mode
+  - Export to JSON/CSV/Markdown
+  - Platform detection
+  - Read-only checks only
+
+**2. Audit Summary Report**
+- **Filename:** `AUDIT_SUMMARY_<hostname or ip address>-<timestamp>.md`
+- **Purpose:** Comprehensive markdown summary of audit findings
+- **Format:** Markdown (.md)
+- **Timestamp Format:** `YYYYMMDD_HHMMSS` (e.g., `20260215_105434`)
+- **Required Sections:**
+  - Device Information (hostname, IP, platform, version)
+  - Executive Summary (compliance score, risk distribution)
+  - Detailed Findings (all failed checks with risk levels)
+  - Recommendations Summary
+  - Next Steps
+- **Example:** `AUDIT_SUMMARY_192.168.20.117-20260215_105434.md`
+
+**3. Pre-Deployment Checklist**
+- **Filename:** `PRE_DEPLOYMENT_CHECKLIST_<hostname or ip address>-<timestamp>.md`
+- **Purpose:** Pre-change control document for remediation planning
+- **Format:** Markdown (.md) with checkboxes
+- **Required Sections:**
+  - Mandatory pre-deployment steps
+  - Testing requirements
+  - Critical change validation steps
+  - Rollback procedures
+  - Implementation log template
+  - Success criteria
+- **Example:** `PRE_DEPLOYMENT_CHECKLIST_192.168.20.117-20260215_105434.md`
+
+**4. Remediation Commands**
+- **Filename:** `remediation_commands_<hostname or ip address>-<timestamp>.txt`
+- **Purpose:** Comprehensive list of configuration commands to fix findings
+- **Format:** Plain text (.txt) with Cisco IOS commands
+- **Required Sections:**
+  - HIGH priority fixes (with risk labels)
+  - MEDIUM priority fixes
+  - LOW priority fixes
+  - Verification commands for each section
+  - Rollback commands
+  - Post-configuration checklist
+- **Example:** `remediation_commands_192.168.20.117-20260215_105434.txt`
+
+**5. Machine-Readable Audit Report**
+- **Filename:** `audit_report_<hostname>_<timestamp>.json`
+- **Purpose:** Structured data for automation, trending, SIEM integration
+- **Format:** JSON
+- **Required Fields:**
+  ```json
+  {
+    "audit_timestamp": "ISO 8601 format",
+    "device_info": {
+      "hostname": "string",
+      "ip_address": "string",
+      "platform": "IOS|NX-OS|IOS-XR",
+      "model": "string",
+      "version": "string"
+    },
+    "summary": {
+      "total_checks": "integer",
+      "passed": "integer",
+      "failed": "integer",
+      "compliance_score": "float"
+    },
+    "findings": [
+      {
+        "category": "string",
+        "name": "string",
+        "risk": "CRITICAL|HIGH|MEDIUM|LOW",
+        "passed": "boolean",
+        "impact": "string",
+        "recommendation": "string"
+      }
+    ]
+  }
+  ```
+- **Example:** `audit_report_hostname_20260215_105434.json`
+
+🔹 Optional Files (Generated as Needed)
+
+**6. Quick Remediation Script**
+- **Filename:** `quick_remediation_script_<hostname>-<timestamp>.txt`
+- **Purpose:** Copy-paste ready configuration commands
+- **Format:** Plain text with minimal comments
+
+**7. CSV Export (for trending/analysis)**
+- **Filename:** `audit_findings_<hostname>_<timestamp>.csv`
+- **Purpose:** Spreadsheet import for management reporting
+
+🔹 Timestamp Format Standard
+
+**Always use:** `YYYYMMDD_HHMMSS` format
+- Year: 4 digits
+- Month: 2 digits (01-12)
+- Day: 2 digits (01-31)
+- Hour: 2 digits (00-23, 24-hour format)
+- Minute: 2 digits (00-59)
+- Second: 2 digits (00-59)
+
+**Example:** `20260215_143022` represents February 15, 2026 at 2:30:22 PM
+
+🔹 Hostname/IP Address Format
+
+- Use hostname if available and DNS-resolvable
+- Use IP address if hostname is "Unknown" or generic
+- Replace spaces with underscores
+- Replace special characters with hyphens
+- Use lowercase for consistency
+
+**Examples:**
+- Good: `CORE-SW-01` or `192.168.20.117`
+- Good: `access_switch_bldg3`
+- Bad: `Core Switch (Building 3)` (use `core-switch-bldg3` instead)
+
+🔹 File Organization
+
+Recommended directory structure:
+```
+project_root/
+├── cisco_audit.py                           # Main script
+├── requirements.txt                         # Python dependencies
+├── .env                                     # Credentials (gitignored)
+├── audits/                                  # Audit results directory
+│   ├── 192.168.20.117/
+│   │   ├── AUDIT_SUMMARY_192.168.20.117-20260215_105434.md
+│   │   ├── audit_report_hostname_20260215_105434.json
+│   │   ├── remediation_commands_192.168.20.117-20260215_105434.txt
+│   │   └── PRE_DEPLOYMENT_CHECKLIST_192.168.20.117-20260215_105434.md
+│   └── 10.10.1.1/
+│       └── [similar files...]
+└── templates/                               # Reusable templates
+```
+
+🔹 Git Commit Guidelines for Audit Files
+
+**CRITICAL:** All audit output files MUST be committed to git for tracking and historical reference.
+
+When committing audit results:
+
+**✅ DO COMMIT (REQUIRED):**
+- `cisco_audit.py` - Main audit script (any updates)
+- `AUDIT_SUMMARY_<hostname>-<timestamp>.md` - Comprehensive audit summary
+- `PRE_DEPLOYMENT_CHECKLIST_<hostname>-<timestamp>.md` - Pre-change control document
+- `remediation_commands_<hostname>-<timestamp>.txt` - Remediation configuration commands
+- `audit_report_<hostname>_<timestamp>.json` - Machine-readable audit results
+- `quick_remediation_script_<hostname>-<timestamp>.txt` - Quick reference commands (if generated)
+- Scripts, templates, documentation, and guides
+
+**❌ DO NOT COMMIT:**
+- `.env` files (contains credentials - should be in .gitignore)
+- Credentials or passwords in any form
+- SNMP community strings
+- Private keys or certificates
+
+**Example commit message:**
+```
+Add comprehensive audit and remediation for 192.168.20.117
+
+Files added:
+- AUDIT_SUMMARY_192.168.20.117-20260215_105434.md
+- audit_report_hostname_20260215_105434.json
+- remediation_commands_192.168.20.117-20260215_105434.txt
+- PRE_DEPLOYMENT_CHECKLIST_192.168.20.117-20260215_105434.md
+
+Audit results:
+- Compliance score: 47.2% (19 findings: 9 HIGH, 7 MEDIUM, 3 LOW)
+- Generated comprehensive remediation guide
+- Expected post-remediation score: 90%+
+
+Co-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>
+```
+
+**Why commit audit files:**
+- Track compliance over time
+- Historical reference for security posture
+- Document remediation efforts
+- Enable trend analysis across multiple audits
+- Provide audit trail for compliance requirements
+
+#### Security Considerations for Audit Scripts
+
+🔹 Credential Handling
+
+```python
+# GOOD - Environment variables
+import os
+password = os.getenv('SSH_PASSWORD')
+
+# GOOD - Credential vault integration
+from hvac import Client
+vault = Client(url='https://vault.company.com')
+password = vault.read('secret/network/devices')['password']
+
+# BAD - Hardcoded
+password = "mysecretpass"  # NEVER DO THIS
+
+# BAD - Command line argument (visible in ps)
+parser.add_argument('--password')  # AVOID
+```
+
+🔹 Logging Best Practices
+
+```python
+import logging
+
+# GOOD - Sanitize sensitive data
+logging.info(f"Connected to {host}")
+
+# BAD - Leaking credentials
+logging.debug(f"Connected to {host} with password {password}")  # NEVER
+
+# GOOD - Mask credentials in output
+def sanitize_output(text):
+    """Remove passwords from show run output"""
+    text = re.sub(r'(password|secret)\s+\d+\s+\S+',
+                  r'\1 <redacted>', text, flags=re.IGNORECASE)
+    return text
+```
+
+🔹 Output File Security
+
+```python
+import os
+import stat
+
+# Set restrictive permissions on report files
+os.chmod('audit_report.json', stat.S_IRUSR | stat.S_IWUSR)  # 0600
+
+# Avoid writing sensitive data to world-readable locations
+# BAD: /tmp/audit_report.json
+# GOOD: ~/.cache/audits/audit_report.json or /var/secure/audits/
+```
+
 #### Example Safe Audit Commands
 Cisco IOS
 show running-config
@@ -455,13 +825,38 @@ else:
 - Check syslog for errors
 - Have console access ready as backup
 
+#### Common Issues & Troubleshooting
+
+| Problem | Cause | Solution |
+|---------|-------|----------|
+| "% Invalid input" | Wrong IOS version/platform | Detect platform first, use appropriate commands |
+| Connection timeout | Firewall/ACL blocking | Verify SSH access, check source IP |
+| "Permission denied" | Insufficient privileges | Verify user has privilege 15 or enable mode |
+| Slow execution | No rate limiting | Add time.sleep(0.5) between commands |
+| Incomplete output | Buffer not fully read | Increase read timeout, check for prompt |
+| Unicode errors (Windows) | cp1252 encoding | Use ASCII characters or set UTF-8 encoding |
+| "Device not supported" | Platform not detected | Add fallback for unknown platforms |
+| JSON export fails | Interactive prompt in CI/CD | Use --non-interactive flag |
+| Regex returns Match object | Not converting to bool | Wrap in bool(): bool(re.search(...)) |
+
+**Debug Mode:**
+```python
+parser.add_argument('--debug', action='store_true',
+                   help='Enable debug logging')
+
+if args.debug:
+    logging.basicConfig(level=logging.DEBUG)
+    logging.debug(f"Executing: {command}")
+    logging.debug(f"Raw output: {repr(output)}")
+```
+
 #### What This Agent Should NEVER Do
 
 ❌ Suggest risky changes without warnings
 ❌ Expose secrets
 ❌ Assume device context
 ❌ Run disruptive commands automatically
-❌ Never make changes to mgt vrf or interface Ethernet3/3, thjis is the management interface
+❌ Never make changes to mgt vrf or interface Ethernet3/3, this is the management interface
 
 #### Goal of This Agent
 

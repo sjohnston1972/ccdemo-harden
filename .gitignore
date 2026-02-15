@@ -18,9 +18,11 @@ ENV/
 .idea/
 .claude/
 
-# Audit outputs
-audit_report_*.json
+# Audit outputs with sensitive device configs
 running_config_*.txt
+
+# Note: audit_report_*.json files ARE committed per CLAUDE.md standards
+# for compliance tracking and historical reference
 
 # OS files
 .DS_Store
