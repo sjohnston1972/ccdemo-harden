@@ -11,6 +11,10 @@ import re
 import sys
 import time
 import json
+import csv
+import logging
+import argparse
+import socket
 from datetime import datetime
 from dotenv import load_dotenv
 import paramiko
@@ -33,7 +37,7 @@ console = Console()
 class CiscoSecurityAuditor:
     """Network Device Security Auditor - Read-only assessment tool"""
 
-    def __init__(self):
+    def __init__(self, args=None):
         self.ssh = None
         self.channel = None
         self.host = os.getenv("DEVICE_IP")
@@ -42,6 +46,23 @@ class CiscoSecurityAuditor:
         self.audit_results = []
         self.device_info = {}
         self.full_config = None
+        self.platform = "Unknown"  # IOS, NX-OS, IOS-XR
+
+        # Command-line arguments
+        self.args = args if args else type('obj', (object,), {
+            'non_interactive': False,
+            'output': '.',
+            'format': 'json',
+            'verbose': False,
+            'dry_run': False
+        })()
+
+        # Configure logging
+        log_level = logging.DEBUG if self.args.verbose else logging.INFO
+        logging.basicConfig(
+            level=log_level,
+            format='%(asctime)s - %(levelname)s - %(message)s'
+        )
 
     def display_banner(self):
         """Display security auditor banner"""
@@ -57,56 +78,64 @@ class CiscoSecurityAuditor:
         """
         console.print(Panel(banner, style="bold cyan"))
 
-    def connect(self):
-        """Establish SSH connection to the device"""
-        try:
-            if not all([self.host, self.username, self.password]):
-                console.print("[bold red]✗[/bold red] Missing credentials in .env file")
-                console.print("[yellow]Required: DEVICE_IP, SSH_USERNAME, SSH_PASSWORD[/yellow]")
+    def connect(self, retries=3):
+        """Establish SSH connection to the device with retry logic"""
+        if not all([self.host, self.username, self.password]):
+            console.print("[bold red]✗[/bold red] Missing credentials in .env file")
+            console.print("[yellow]Required: DEVICE_IP, SSH_USERNAME, SSH_PASSWORD[/yellow]")
+            return False
+
+        console.print(f"\n[bold]Target Device:[/bold] {self.host}")
+        console.print(f"[bold]Username:[/bold] {self.username}")
+
+        # Connection retry logic with exponential backoff
+        for attempt in range(retries):
+            try:
+                with Progress(
+                    SpinnerColumn(),
+                    TextColumn("[bold blue]Establishing secure SSH connection..."),
+                    transient=True
+                ) as progress:
+                    progress.add_task("connecting", total=None)
+
+                    self.ssh = paramiko.SSHClient()
+                    self.ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                    self.ssh.connect(
+                        hostname=self.host,
+                        username=self.username,
+                        password=self.password,
+                        look_for_keys=False,
+                        allow_agent=False,
+                        timeout=15,
+                        auth_timeout=15
+                    )
+
+                    self.channel = self.ssh.invoke_shell()
+                    time.sleep(1)
+                    self._clear_buffer()
+
+                    # Disable paging
+                    self.channel.send("terminal length 0\n")
+                    time.sleep(0.5)
+                    self._clear_buffer()
+
+                console.print("[bold green]✓[/bold green] Successfully connected to device")
+                return True
+
+            except paramiko.AuthenticationException:
+                console.print("[bold red]✗[/bold red] Authentication failed - Check credentials")
                 return False
+            except (paramiko.SSHException, socket.timeout, Exception) as e:
+                if attempt < retries - 1:
+                    wait = 2 ** attempt  # Exponential backoff: 1s, 2s, 4s
+                    logging.warning(f"Connection failed, retrying in {wait}s... ({str(e)})")
+                    console.print(f"[yellow]⚠[/yellow] Connection attempt {attempt + 1} failed, retrying in {wait}s...")
+                    time.sleep(wait)
+                else:
+                    console.print(f"[bold red]✗[/bold red] Connection failed after {retries} attempts: {str(e)}")
+                    return False
 
-            console.print(f"\n[bold]Target Device:[/bold] {self.host}")
-            console.print(f"[bold]Username:[/bold] {self.username}")
-
-            with Progress(
-                SpinnerColumn(),
-                TextColumn("[bold blue]Establishing secure SSH connection..."),
-                transient=True
-            ) as progress:
-                progress.add_task("connecting", total=None)
-
-                self.ssh = paramiko.SSHClient()
-                self.ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-                self.ssh.connect(
-                    hostname=self.host,
-                    username=self.username,
-                    password=self.password,
-                    look_for_keys=False,
-                    allow_agent=False,
-                    timeout=15
-                )
-
-                self.channel = self.ssh.invoke_shell()
-                time.sleep(1)
-                self._clear_buffer()
-
-                # Disable paging
-                self.channel.send("terminal length 0\n")
-                time.sleep(0.5)
-                self._clear_buffer()
-
-            console.print("[bold green]✓[/bold green] Successfully connected to device")
-            return True
-
-        except paramiko.AuthenticationException:
-            console.print("[bold red]✗[/bold red] Authentication failed - Check credentials")
-            return False
-        except paramiko.SSHException as e:
-            console.print(f"[bold red]✗[/bold red] SSH error: {str(e)}")
-            return False
-        except Exception as e:
-            console.print(f"[bold red]✗[/bold red] Connection failed: {str(e)}")
-            return False
+        return False
 
     def _clear_buffer(self, timeout=2):
         """Clear the channel buffer"""
@@ -122,19 +151,56 @@ class CiscoSecurityAuditor:
                 time.sleep(0.1)
         return output
 
-    def run_command(self, command, timeout=10):
-        """Execute a command and return output"""
+    def run_command(self, command, timeout=10, delay=0.5):
+        """Execute command with error handling and rate limiting"""
+        if self.args.dry_run:
+            console.print(f"[dim]Would execute: {command}[/dim]")
+            return ""
+
         try:
+            logging.debug(f"Executing command: {command}")
             self.channel.send(command + "\n")
-            time.sleep(0.5)
+            time.sleep(delay)  # Rate limiting
             output = self._clear_buffer(timeout)
+
+            # Check for command errors
+            if any(err in output.lower() for err in ['invalid', 'incomplete', 'ambiguous', '% ']):
+                logging.warning(f"Command '{command}' may have returned an error")
+
             return output
+
+        except socket.timeout:
+            logging.error(f"Timeout executing: {command}")
+            console.print(f"[red]⚠ Timeout executing: {command}[/red]")
+            return ""
         except Exception as e:
+            logging.error(f"Failed to execute '{command}': {e}")
             console.print(f"[red]Error executing command: {str(e)}[/red]")
             return ""
 
+    def detect_platform(self):
+        """Detect Cisco platform (IOS/IOS-XE, NX-OS, IOS-XR)"""
+        console.print("\n[bold cyan]=== Platform Detection ===[/bold cyan]")
+
+        version_output = self.run_command("show version")
+
+        # Detect platform
+        if "NX-OS" in version_output or "Nexus" in version_output:
+            self.platform = "NX-OS"
+        elif "IOS XR" in version_output:
+            self.platform = "IOS-XR"
+        elif "IOS" in version_output or "IOS-XE" in version_output:
+            self.platform = "IOS"
+        else:
+            self.platform = "Unknown"
+
+        console.print(f"[bold]Detected Platform:[/bold] [yellow]{self.platform}[/yellow]")
+        logging.info(f"Detected platform: {self.platform}")
+
+        return self.platform
+
     def gather_device_info(self):
-        """Collect device identification information"""
+        """Collect device identification information with robust parsing"""
         console.print("\n[bold cyan]=== Device Information Gathering ===[/bold cyan]")
 
         with Progress(
@@ -144,30 +210,73 @@ class CiscoSecurityAuditor:
         ) as progress:
             progress.add_task("gathering", total=None)
 
-            # Get hostname
+            # Get hostname - multiple patterns
             hostname_output = self.run_command("show running-config | include hostname")
-            hostname_match = re.search(r'hostname\s+(\S+)', hostname_output, re.IGNORECASE)
-            self.device_info['hostname'] = hostname_match.group(1) if hostname_match else "Unknown"
+            hostname_patterns = [
+                r'hostname\s+(\S+)',
+                r'^hostname\s+(.+)$'
+            ]
+            hostname = "Unknown"
+            for pattern in hostname_patterns:
+                match = re.search(pattern, hostname_output, re.IGNORECASE | re.MULTILINE)
+                if match:
+                    hostname = match.group(1).strip()
+                    break
+            self.device_info['hostname'] = hostname
 
             # Get version info
             version_output = self.run_command("show version")
 
-            # Parse IOS version
-            ios_match = re.search(r'Version\s+([^\s,]+)', version_output, re.IGNORECASE)
-            self.device_info['ios_version'] = ios_match.group(1) if ios_match else "Unknown"
+            # Parse version - multiple patterns
+            version_patterns = [
+                r'Version\s+([^\s,\)]+)',
+                r'Cisco\s+IOS\s+Software[^,]*,\s+Version\s+([^\s,]+)',
+                r'Software\s+Version\s+([^\s,]+)',
+                r'System\s+version:\s+([^\s,]+)'
+            ]
+            version = "Unknown"
+            for pattern in version_patterns:
+                match = re.search(pattern, version_output, re.IGNORECASE)
+                if match:
+                    version = match.group(1)
+                    break
+            self.device_info['ios_version'] = version
 
-            # Parse model
-            model_match = re.search(r'cisco\s+(\S+)\s+\(', version_output, re.IGNORECASE)
-            if not model_match:
-                model_match = re.search(r'Model\s+number\s*:\s*(\S+)', version_output, re.IGNORECASE)
-            self.device_info['model'] = model_match.group(1) if model_match else "Unknown"
+            # Parse model - multiple patterns
+            model_patterns = [
+                r'cisco\s+(\S+)\s+\(',           # IOS format: cisco WS-C3850 (
+                r'Model\s+number\s*:\s*(\S+)',   # Alt format
+                r'Hardware:\s+(\S+)',            # NX-OS format
+                r'cisco\s+(\S+)\s+processor',    # Alt IOS format
+                r'Product\s+Name:\s+(\S+)'       # Another variant
+            ]
+            model = "Unknown"
+            for pattern in model_patterns:
+                match = re.search(pattern, version_output, re.IGNORECASE)
+                if match:
+                    model = match.group(1)
+                    break
+            self.device_info['model'] = model
 
-            # Parse uptime
-            uptime_match = re.search(r'uptime is\s+(.+?)(?:\n|$)', version_output, re.IGNORECASE)
-            self.device_info['uptime'] = uptime_match.group(1).strip() if uptime_match else "Unknown"
+            # Parse uptime - multiple patterns
+            uptime_patterns = [
+                r'uptime is\s+(.+?)(?:\n|$)',
+                r'System\s+uptime:\s+(.+?)(?:\n|$)',
+                r'Uptime:\s+(.+?)(?:\n|$)'
+            ]
+            uptime = "Unknown"
+            for pattern in uptime_patterns:
+                match = re.search(pattern, version_output, re.IGNORECASE)
+                if match:
+                    uptime = match.group(1).strip()
+                    break
+            self.device_info['uptime'] = uptime
 
-            # Get full running config for analysis
-            self.full_config = self.run_command("show running-config", timeout=20)
+            # Store platform
+            self.device_info['platform'] = self.platform
+
+            # Get full running config for analysis (with longer timeout for large configs)
+            self.full_config = self.run_command("show running-config", timeout=30, delay=2.0)
 
         # Display device info
         info_table = Table(title="[bold]Device Information[/bold]", show_header=True)
@@ -175,6 +284,7 @@ class CiscoSecurityAuditor:
         info_table.add_column("Value", style="yellow")
 
         info_table.add_row("Hostname", self.device_info['hostname'])
+        info_table.add_row("Platform", self.device_info['platform'])
         info_table.add_row("Model", self.device_info['model'])
         info_table.add_row("IOS Version", self.device_info['ios_version'])
         info_table.add_row("Uptime", self.device_info['uptime'])
@@ -222,7 +332,7 @@ class CiscoSecurityAuditor:
             {
                 "name": "Exec Timeout Configured",
                 "command": "show running-config | include exec-timeout",
-                "check": lambda out: re.search(r'exec-timeout\s+\d+', out, re.IGNORECASE),
+                "check": lambda out: bool(re.search(r'exec-timeout\s+\d+', out, re.IGNORECASE)),
                 "risk": "MEDIUM",
                 "impact": "Idle sessions can be exploited if left unattended",
                 "recommendation": "Configure: line vty 0 15 → exec-timeout 10 0"
@@ -246,7 +356,7 @@ class CiscoSecurityAuditor:
             {
                 "name": "SSH Authentication Retries Limited",
                 "command": "show ip ssh",
-                "check": lambda out: re.search(r'retries\s+[1-9]', out, re.IGNORECASE),
+                "check": lambda out: bool(re.search(r'retries\s+[1-9]', out, re.IGNORECASE)),
                 "risk": "MEDIUM",
                 "impact": "Unlimited retries enable password guessing attacks",
                 "recommendation": "Configure: ip ssh authentication-retries 3"
@@ -287,7 +397,7 @@ class CiscoSecurityAuditor:
             {
                 "name": "Management ACL",
                 "command": "show running-config | section line vty",
-                "check": lambda out: re.search(r'access-class\s+\S+\s+in', out, re.IGNORECASE),
+                "check": lambda out: bool(re.search(r'access-class\s+\S+\s+in', out, re.IGNORECASE)),
                 "risk": "HIGH",
                 "impact": "Unrestricted management access from any network increases attack surface",
                 "recommendation": "Configure: access-list [#] permit [mgmt-network], line vty 0 15 → access-class [#] in"
@@ -417,7 +527,7 @@ class CiscoSecurityAuditor:
             {
                 "name": "BPDU Guard",
                 "command": "show running-config | include spanning-tree",
-                "check": lambda out: re.search(r'spanning-tree.*bpduguard', out, re.IGNORECASE),
+                "check": lambda out: bool(re.search(r'spanning-tree.*bpduguard', out, re.IGNORECASE)),
                 "risk": "HIGH",
                 "impact": "Rogue switches can cause spanning-tree topology manipulation",
                 "recommendation": "Configure: spanning-tree portfast bpduguard default"
@@ -690,11 +800,16 @@ Verify with: {self._get_verification_command(result['name'])}
         }
         return command_map.get(check_name, "show running-config")
 
-    def export_results(self):
-        """Export audit results to JSON file"""
+    def export_results(self, export_format=None):
+        """Export audit results in multiple formats (JSON, CSV, Markdown)"""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"audit_report_{self.device_info.get('hostname', 'unknown')}_{timestamp}.json"
+        hostname = self.device_info.get('hostname', 'unknown')
 
+        # Use format from args if not specified
+        if export_format is None:
+            export_format = self.args.format
+
+        # Prepare report data
         report_data = {
             'audit_timestamp': datetime.now().isoformat(),
             'device_info': self.device_info,
@@ -707,12 +822,61 @@ Verify with: {self._get_verification_command(result['name'])}
             'findings': self.audit_results
         }
 
+        # Determine output path
+        output_dir = self.args.output
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir)
+
         try:
-            with open(filename, 'w') as f:
-                json.dump(report_data, f, indent=2)
-            console.print(f"\n[bold green]✓[/bold green] Detailed report exported to: [cyan]{filename}[/cyan]")
+            if export_format == 'json':
+                filename = os.path.join(output_dir, f"audit_report_{hostname}_{timestamp}.json")
+                with open(filename, 'w') as f:
+                    json.dump(report_data, f, indent=2)
+                console.print(f"\n[bold green]✓[/bold green] JSON report exported to: [cyan]{filename}[/cyan]")
+
+            elif export_format == 'csv':
+                filename = os.path.join(output_dir, f"audit_report_{hostname}_{timestamp}.csv")
+                with open(filename, 'w', newline='') as f:
+                    writer = csv.writer(f)
+                    writer.writerow(['Category', 'Check Name', 'Risk Level', 'Status', 'Impact', 'Recommendation'])
+                    for result in self.audit_results:
+                        writer.writerow([
+                            result['category'],
+                            result['name'],
+                            result['risk'],
+                            'PASS' if result['passed'] else 'FAIL',
+                            result['impact'],
+                            result['recommendation']
+                        ])
+                console.print(f"\n[bold green]✓[/bold green] CSV report exported to: [cyan]{filename}[/cyan]")
+
+            elif export_format == 'markdown':
+                filename = os.path.join(output_dir, f"audit_report_{hostname}_{timestamp}.md")
+                with open(filename, 'w') as f:
+                    f.write(f"# Security Audit Report\n\n")
+                    f.write(f"**Device:** {hostname}\n\n")
+                    f.write(f"**IP Address:** {self.device_info.get('ip_address', self.host)}\n\n")
+                    f.write(f"**Audit Date:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+                    f.write(f"## Summary\n\n")
+                    f.write(f"- **Total Checks:** {report_data['summary']['total_checks']}\n")
+                    f.write(f"- **Passed:** {report_data['summary']['passed']}\n")
+                    f.write(f"- **Failed:** {report_data['summary']['failed']}\n")
+                    f.write(f"- **Compliance Score:** {report_data['summary']['compliance_score']}%\n\n")
+                    f.write(f"## Findings\n\n")
+                    for idx, result in enumerate([r for r in self.audit_results if not r['passed']], 1):
+                        f.write(f"### Finding #{idx}: {result['name']}\n\n")
+                        f.write(f"- **Category:** {result['category']}\n")
+                        f.write(f"- **Risk Level:** {result['risk']}\n")
+                        f.write(f"- **Impact:** {result['impact']}\n")
+                        f.write(f"- **Recommendation:** {result['recommendation']}\n\n")
+                console.print(f"\n[bold green]✓[/bold green] Markdown report exported to: [cyan]{filename}[/cyan]")
+
+            return filename
+
         except Exception as e:
+            logging.error(f"Failed to export report: {e}")
             console.print(f"[bold red]✗[/bold red] Failed to export report: {str(e)}")
+            return None
 
     def disconnect(self):
         """Close SSH connection"""
@@ -728,6 +892,9 @@ Verify with: {self._get_verification_command(result['name'])}
             return False
 
         try:
+            # Detect platform first (CRITICAL per CLAUDE.md)
+            self.detect_platform()
+
             # Gather device information
             self.gather_device_info()
 
@@ -742,9 +909,13 @@ Verify with: {self._get_verification_command(result['name'])}
             # Generate comprehensive report
             self.generate_report()
 
-            # Ask to export
-            if Confirm.ask("\n[bold cyan]Export detailed results to JSON file?[/bold cyan]", default=True):
+            # Export results (auto-export in non-interactive mode)
+            if self.args.non_interactive:
+                console.print("\n[bold cyan]Auto-exporting results (non-interactive mode)[/bold cyan]")
                 self.export_results()
+            else:
+                if Confirm.ask("\n[bold cyan]Export detailed results?[/bold cyan]", default=True):
+                    self.export_results()
 
             return True
 
@@ -761,11 +932,57 @@ Verify with: {self._get_verification_command(result['name'])}
 
 
 def main():
-    """Main entry point"""
+    """Main entry point with CLI argument parsing"""
+    # Parse command-line arguments
+    parser = argparse.ArgumentParser(
+        description='Cisco Network Device Hardening Auditor - Enterprise Security Assessment Tool',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Interactive mode (default)
+  python cisco_audit.py
+
+  # Non-interactive mode for automation
+  python cisco_audit.py --non-interactive --format json --output ./reports/
+
+  # Dry-run mode (show commands without executing)
+  python cisco_audit.py --dry-run
+
+  # Verbose logging
+  python cisco_audit.py --verbose
+
+  # Export to CSV
+  python cisco_audit.py -n -f csv -o /var/reports/
+        """
+    )
+
+    parser.add_argument('--non-interactive', '-n', action='store_true',
+                       help='Run without user prompts (for CI/CD, cron jobs)')
+    parser.add_argument('--output', '-o', default='.',
+                       help='Output directory for reports (default: current directory)')
+    parser.add_argument('--format', '-f', choices=['json', 'csv', 'markdown'],
+                       default='json', help='Report format (default: json)')
+    parser.add_argument('--verbose', '-v', action='store_true',
+                       help='Enable detailed logging')
+    parser.add_argument('--dry-run', action='store_true',
+                       help='Show commands without executing (testing mode)')
+
+    args = parser.parse_args()
+
+    # Display banner
     console.print("\n[bold blue]Cisco Network Device Hardening Auditor[/bold blue]")
     console.print("[blue]" + "="*50 + "[/blue]\n")
 
-    auditor = CiscoSecurityAuditor()
+    if args.dry_run:
+        console.print("[bold yellow]⚠ DRY-RUN MODE - No commands will be executed[/bold yellow]\n")
+
+    if args.non_interactive:
+        console.print("[bold cyan]Running in NON-INTERACTIVE mode[/bold cyan]")
+        console.print(f"[cyan]Output format: {args.format}[/cyan]")
+        console.print(f"[cyan]Output directory: {args.output}[/cyan]\n")
+
+    # Create auditor instance
+    auditor = CiscoSecurityAuditor(args)
 
     try:
         auditor.run_audit()
@@ -776,6 +993,7 @@ def main():
 
     except Exception as e:
         console.print(f"\n[bold red]Fatal error: {str(e)}[/bold red]")
+        logging.error(f"Fatal error: {e}", exc_info=True)
         sys.exit(1)
 
 

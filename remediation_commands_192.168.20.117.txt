@@ -1,0 +1,618 @@
+================================================================================
+  CISCO DEVICE HARDENING REMEDIATION GUIDE
+  Device: 192.168.20.117 (hostname)
+  Platform: IOS
+  Generated: 2026-02-15
+================================================================================
+
+CRITICAL WARNING:
+- Review ALL commands before applying
+- Test in lab environment first if possible
+- Apply during maintenance window
+- Have console access ready as backup
+- Never modify management interface Ethernet3/3 or management VRF
+
+RISK LEVELS:
+[SAFE] - Read-only or minimal impact
+[LOW RISK] - Minor impact, easily reversible
+[MEDIUM RISK] - Could affect functionality, test first
+[HIGH RISK] - Could disrupt service, requires careful planning
+
+================================================================================
+SECTION 1: HIGH PRIORITY FIXES (CRITICAL & HIGH RISK FINDINGS)
+================================================================================
+
+#------------------------------------------------------------------------------
+# Finding #1: NTP Authentication [HIGH RISK]
+# Impact: Unauthenticated NTP can be spoofed, causing time-based attacks
+# Risk Level: [MEDIUM RISK] - May temporarily disrupt time sync
+#------------------------------------------------------------------------------
+
+configure terminal
+!
+! Define NTP authentication key (use a strong key)
+ntp authentication-key 1 md5 <YOUR_SECURE_NTP_KEY>
+!
+! Enable NTP authentication
+ntp authenticate
+!
+! Mark key as trusted
+ntp trusted-key 1
+!
+! Configure NTP server with authentication (replace with your NTP server)
+ntp server <YOUR_NTP_SERVER_IP> key 1
+!
+end
+
+# Verification:
+show ntp status
+show ntp associations
+
+#------------------------------------------------------------------------------
+# Finding #2: SNMPv3 Security [HIGH RISK]
+# Impact: SNMPv1/v2c community strings transmitted in cleartext
+# Risk Level: [HIGH RISK] - May break existing SNMP monitoring
+#------------------------------------------------------------------------------
+
+configure terminal
+!
+! Remove any existing SNMPv1/v2c community strings
+no snmp-server community <OLD_COMMUNITY_STRING>
+!
+! Create SNMPv3 group with privacy
+snmp-server group SNMPV3_GROUP v3 priv
+!
+! Create SNMPv3 user with auth and encryption (use strong passwords)
+snmp-server user SNMPV3_USER SNMPV3_GROUP v3 auth sha <AUTH_PASSWORD> priv aes 128 <PRIV_PASSWORD>
+!
+! Configure ACL for SNMP access (optional but recommended)
+access-list 99 permit <MGMT_NETWORK> <WILDCARD_MASK>
+snmp-server access SNMPV3_GROUP v3 priv 99
+!
+end
+
+# Verification:
+show snmp user
+show snmp group
+
+#------------------------------------------------------------------------------
+# Finding #3: Management ACL [HIGH RISK]
+# Impact: Unrestricted management access increases attack surface
+# Risk Level: [HIGH RISK] - Could lock you out if misconfigured
+#------------------------------------------------------------------------------
+
+configure terminal
+!
+! Create access list for management networks (adjust to your networks)
+access-list 10 remark === Management Network Access ===
+access-list 10 permit <MGMT_NETWORK_1> <WILDCARD_MASK>
+access-list 10 permit <MGMT_NETWORK_2> <WILDCARD_MASK>
+access-list 10 deny any log
+!
+! Apply to VTY lines
+line vty 0 4
+ access-class 10 in
+!
+! Also apply to console if needed
+line console 0
+ access-class 10 in
+!
+end
+
+# Verification:
+show access-lists 10
+show line vty 0 4
+
+# IMPORTANT: Test SSH access from allowed network BEFORE disconnecting!
+
+#------------------------------------------------------------------------------
+# Finding #4: HTTP Server Disabled [HIGH RISK]
+# Impact: HTTP server provides unauthenticated device information access
+# Risk Level: [LOW RISK] - Only affects web UI (rarely used)
+#------------------------------------------------------------------------------
+
+configure terminal
+!
+! Disable HTTP server
+no ip http server
+!
+! Disable HTTPS server (unless required for management)
+no ip http secure-server
+!
+end
+
+# Verification:
+show ip http server status
+
+#------------------------------------------------------------------------------
+# Finding #5: DHCP Snooping [HIGH RISK]
+# Impact: Rogue DHCP servers can redirect traffic and perform MITM attacks
+# Risk Level: [MEDIUM RISK] - Must identify trusted ports correctly
+#------------------------------------------------------------------------------
+
+configure terminal
+!
+! Enable DHCP snooping globally
+ip dhcp snooping
+!
+! Enable on VLANs (adjust VLAN range as needed)
+ip dhcp snooping vlan 1-100
+!
+! Disable Option 82 insertion (if needed for compatibility)
+no ip dhcp snooping information option
+!
+! Configure trusted ports (uplink ports to legitimate DHCP servers)
+interface GigabitEthernet0/1
+ ip dhcp snooping trust
+ exit
+!
+! Rate limit on untrusted ports (access ports)
+interface range GigabitEthernet0/2 - 24
+ ip dhcp snooping limit rate 10
+ exit
+!
+end
+
+# Verification:
+show ip dhcp snooping
+show ip dhcp snooping binding
+
+#------------------------------------------------------------------------------
+# Finding #6: Dynamic ARP Inspection [HIGH RISK]
+# Impact: ARP spoofing enables man-in-the-middle attacks
+# Risk Level: [MEDIUM RISK] - Requires DHCP snooping to be configured first
+#------------------------------------------------------------------------------
+
+configure terminal
+!
+! Enable DAI on VLANs (must have DHCP snooping configured first)
+ip arp inspection vlan 1-100
+!
+! Configure trusted ports (uplinks, server ports)
+interface GigabitEthernet0/1
+ ip arp inspection trust
+ exit
+!
+! Rate limit on untrusted ports
+interface range GigabitEthernet0/2 - 24
+ ip arp inspection limit rate 15
+ exit
+!
+! Enable logging
+ip arp inspection log-buffer entries 1024
+!
+end
+
+# Verification:
+show ip arp inspection
+show ip arp inspection statistics
+
+#------------------------------------------------------------------------------
+# Finding #7: BPDU Guard [HIGH RISK]
+# Impact: Rogue switches can cause spanning-tree topology manipulation
+# Risk Level: [LOW RISK] - Protects against unauthorized switches
+#------------------------------------------------------------------------------
+
+configure terminal
+!
+! Enable BPDU Guard globally on PortFast-enabled ports
+spanning-tree portfast bpduguard default
+!
+! Enable PortFast on access ports (not on trunks!)
+interface range GigabitEthernet0/2 - 24
+ spanning-tree portfast
+ exit
+!
+end
+
+# Verification:
+show spanning-tree summary
+show spanning-tree interface detail
+
+#------------------------------------------------------------------------------
+# Finding #8: Control Plane Policing [HIGH RISK]
+# Impact: Control plane vulnerable to DoS attacks
+# Risk Level: [HIGH RISK] - Complex config, requires careful planning
+#------------------------------------------------------------------------------
+
+configure terminal
+!
+! Create class-maps for different traffic types
+class-map match-any CoPP-CRITICAL
+ match access-group 120
+!
+class-map match-any CoPP-IMPORTANT
+ match access-group 121
+!
+class-map match-any CoPP-NORMAL
+ match access-group 122
+!
+class-map match-any CoPP-UNDESIRABLE
+ match access-group 123
+!
+! Create access-lists for classification
+access-list 120 permit ospf any any
+access-list 120 permit eigrp any any
+access-list 120 permit pim any any
+!
+access-list 121 permit tcp any any eq 22
+access-list 121 permit tcp any any eq 23
+access-list 121 permit udp any any eq snmp
+!
+access-list 122 permit icmp any any
+access-list 122 permit tcp any any eq www
+!
+access-list 123 permit ip any any
+!
+! Create policy-map with rate limits
+policy-map CoPP-POLICY
+ class CoPP-CRITICAL
+  police 8000 1500 1500 conform-action transmit exceed-action transmit
+ class CoPP-IMPORTANT
+  police 4000 1500 1500 conform-action transmit exceed-action drop
+ class CoPP-NORMAL
+  police 2000 1500 1500 conform-action transmit exceed-action drop
+ class CoPP-UNDESIRABLE
+  police 500 1500 1500 conform-action drop exceed-action drop
+!
+! Apply to control-plane
+control-plane
+ service-policy input CoPP-POLICY
+!
+end
+
+# Verification:
+show policy-map control-plane
+show access-lists
+
+#------------------------------------------------------------------------------
+# Finding #9: AAA Authentication [HIGH RISK]
+# Impact: No centralized authentication policy enforced
+# Risk Level: [HIGH RISK] - Could lock you out if misconfigured
+#------------------------------------------------------------------------------
+
+configure terminal
+!
+! Enable AAA new model (if not already enabled)
+aaa new-model
+!
+! Configure TACACS+ server (replace with your server)
+tacacs server TACACS-SERVER-1
+ address ipv4 <TACACS_SERVER_IP>
+ key <TACACS_SHARED_SECRET>
+ exit
+!
+! Create server group
+aaa group server tacacs+ TACACS-GROUP
+ server name TACACS-SERVER-1
+ exit
+!
+! Configure authentication (local as fallback)
+aaa authentication login default group TACACS-GROUP local
+aaa authentication enable default group TACACS-GROUP enable
+!
+! Configure authorization
+aaa authorization exec default group TACACS-GROUP local
+aaa authorization commands 15 default group TACACS-GROUP local
+!
+! Configure accounting
+aaa accounting exec default start-stop group TACACS-GROUP
+aaa accounting commands 15 default start-stop group TACACS-GROUP
+!
+end
+
+# Verification:
+show aaa servers
+show tacacs
+test aaa group TACACS-GROUP <username> <password> new-code
+
+# CRITICAL: Test authentication from another session BEFORE disconnecting!
+
+================================================================================
+SECTION 2: MEDIUM PRIORITY FIXES
+================================================================================
+
+#------------------------------------------------------------------------------
+# Finding #10: SSH Authentication Retries [MEDIUM RISK]
+# Impact: Unlimited retries enable password guessing attacks
+# Risk Level: [LOW RISK] - Hardens SSH without breaking functionality
+#------------------------------------------------------------------------------
+
+configure terminal
+!
+! Limit SSH authentication retries
+ip ssh authentication-retries 3
+!
+! Also configure SSH timeout (recommended)
+ip ssh time-out 60
+!
+end
+
+# Verification:
+show ip ssh
+
+#------------------------------------------------------------------------------
+# Finding #11: Syslog Configuration [MEDIUM RISK]
+# Impact: Without centralized logging, security events may go undetected
+# Risk Level: [LOW RISK] - Adds logging only
+#------------------------------------------------------------------------------
+
+configure terminal
+!
+! Configure syslog server (replace with your server)
+logging host <SYSLOG_SERVER_IP>
+!
+! Set logging level
+logging trap informational
+!
+! Enable logging with timestamps
+service timestamps log datetime msec show-timezone
+!
+! Set source interface for logging
+logging source-interface <MANAGEMENT_INTERFACE>
+!
+! Enable buffered logging
+logging buffered 16384 informational
+!
+end
+
+# Verification:
+show logging
+
+#------------------------------------------------------------------------------
+# Finding #12: HTTPS Server Status [MEDIUM RISK]
+# Impact: Reduce attack surface by disabling unused services
+# Risk Level: [LOW RISK] - Only if HTTPS not needed
+#------------------------------------------------------------------------------
+
+configure terminal
+!
+! Disable HTTPS server (unless required for management)
+no ip http secure-server
+!
+end
+
+# Verification:
+show ip http server status
+
+#------------------------------------------------------------------------------
+# Finding #13: CDP Global Status [MEDIUM RISK]
+# Impact: CDP discloses device information to potential attackers
+# Risk Level: [LOW RISK] - May affect discovery tools
+#------------------------------------------------------------------------------
+
+configure terminal
+!
+! Option 1: Disable CDP globally (most secure)
+no cdp run
+!
+! Option 2: Keep CDP enabled but disable on untrusted ports
+cdp run
+interface range GigabitEthernet0/2 - 24
+ no cdp enable
+ exit
+!
+end
+
+# Verification:
+show cdp
+
+#------------------------------------------------------------------------------
+# Finding #14: Source Routing Disabled [MEDIUM RISK]
+# Impact: Source routing can bypass security controls
+# Risk Level: [LOW RISK] - Rarely used feature
+#------------------------------------------------------------------------------
+
+configure terminal
+!
+! Disable IP source routing
+no ip source-route
+!
+end
+
+# Verification:
+show running-config | include source-route
+
+#------------------------------------------------------------------------------
+# Finding #15: Loop Guard [MEDIUM RISK]
+# Impact: Unidirectional link failures can cause forwarding loops
+# Risk Level: [LOW RISK] - Adds protection
+#------------------------------------------------------------------------------
+
+configure terminal
+!
+! Enable loop guard globally
+spanning-tree loopguard default
+!
+end
+
+# Verification:
+show spanning-tree summary
+
+#------------------------------------------------------------------------------
+# Finding #16: TACACS+ Configuration [MEDIUM RISK]
+# Impact: Local authentication only, no centralized identity management
+# Risk Level: [See AAA Authentication section above - covered there]
+#------------------------------------------------------------------------------
+
+# Note: This is addressed in the AAA Authentication section (Finding #9)
+
+================================================================================
+SECTION 3: LOW PRIORITY FIXES (Still Important for Compliance)
+================================================================================
+
+#------------------------------------------------------------------------------
+# Finding #17: Login Banner [LOW RISK]
+# Impact: Legal warning banners establish unauthorized access policy
+# Risk Level: [SAFE] - No functional impact
+#------------------------------------------------------------------------------
+
+configure terminal
+!
+! Configure login banner (customize message as needed)
+banner login ^C
+================================================================================
+                          AUTHORIZED ACCESS ONLY
+================================================================================
+
+This system is for the use of authorized users only. Individuals using this
+computer system without authority, or in excess of their authority, are
+subject to having all of their activities on this system monitored and
+recorded by system personnel.
+
+In the course of monitoring individuals improperly using this system, or in
+the course of system maintenance, the activities of authorized users may
+also be monitored. Anyone using this system expressly consents to such
+monitoring and is advised that if such monitoring reveals possible evidence
+of criminal activity, system personnel may provide the evidence of such
+monitoring to law enforcement officials.
+
+Unauthorized access is a violation of federal and state law.
+
+================================================================================
+^C
+!
+! Also configure MOTD banner
+banner motd ^C
+================================================================================
+         WARNING: Unauthorized access to this device is prohibited!
+================================================================================
+^C
+!
+end
+
+# Verification:
+show running-config | begin banner
+
+#------------------------------------------------------------------------------
+# Finding #18: Finger Service Disabled [LOW RISK]
+# Impact: Finger service can leak user information
+# Risk Level: [SAFE] - Legacy service
+#------------------------------------------------------------------------------
+
+configure terminal
+!
+! Disable finger service
+no ip finger
+!
+end
+
+# Verification:
+show running-config | include finger
+
+#------------------------------------------------------------------------------
+# Finding #19: PAD Service Disabled [LOW RISK]
+# Impact: PAD service is legacy and rarely needed
+# Risk Level: [SAFE] - Legacy service
+#------------------------------------------------------------------------------
+
+configure terminal
+!
+! Disable PAD service
+no service pad
+!
+end
+
+# Verification:
+show running-config | include pad
+
+================================================================================
+ADDITIONAL RECOMMENDED HARDENING (Not in Failed Checks)
+================================================================================
+
+#------------------------------------------------------------------------------
+# Password Policies and Security
+#------------------------------------------------------------------------------
+
+configure terminal
+!
+! Enable password encryption (already enabled per audit)
+service password-encryption
+!
+! Configure password policy (if supported by IOS version)
+security passwords min-length 10
+!
+! Enable secret instead of password
+enable secret <STRONG_PASSWORD>
+!
+! Disable unused usernames
+no username <unused_account>
+!
+end
+
+#------------------------------------------------------------------------------
+# Additional Security Services
+#------------------------------------------------------------------------------
+
+configure terminal
+!
+! Disable other legacy services
+no ip bootp server
+no ip domain-lookup
+no service config
+!
+! Enable TCP keepalives
+service tcp-keepalives-in
+service tcp-keepalives-out
+!
+! Disable gratuitous ARP
+no ip gratuitous-arps
+!
+end
+
+================================================================================
+POST-CONFIGURATION VERIFICATION CHECKLIST
+================================================================================
+
+[ ] Verify SSH access works from management network
+[ ] Verify console access still works (have backup ready)
+[ ] Test TACACS+ authentication with test account
+[ ] Verify NTP synchronization: show ntp status
+[ ] Check DHCP snooping binding table: show ip dhcp snooping binding
+[ ] Verify DAI statistics: show ip arp inspection statistics
+[ ] Check spanning-tree status: show spanning-tree summary
+[ ] Review control plane policy: show policy-map control-plane
+[ ] Check syslog connectivity: show logging
+[ ] Verify SNMPv3 access from monitoring system
+[ ] Review ACL hit counts: show access-lists
+[ ] Save configuration: write memory
+
+================================================================================
+ROLLBACK PLAN (In Case of Issues)
+================================================================================
+
+1. If locked out via SSH:
+   - Use console access
+   - Remove access-list from VTY lines: no access-class 10 in
+
+2. If AAA issues:
+   - Boot into ROMMON mode
+   - Use password recovery procedure
+   - Remove AAA commands: no aaa new-model
+
+3. If DHCP/ARP issues causing connectivity problems:
+   - Disable DHCP snooping: no ip dhcp snooping
+   - Disable DAI: no ip arp inspection vlan 1-100
+
+4. Always keep a backup configuration:
+   copy running-config tftp://backup-server/hostname-backup.cfg
+
+================================================================================
+FINAL NOTES
+================================================================================
+
+1. ALWAYS test in lab environment first if possible
+2. Apply changes during maintenance window
+3. Have console access ready as backup
+4. Apply configurations in sections, test between sections
+5. Save configuration after each successful section: write memory
+6. Document all changes in change management system
+7. Update network documentation with new configurations
+8. Notify team members of hardening changes
+9. Re-run audit after changes: python cisco_audit.py --non-interactive
+
+Expected compliance score after remediation: 90%+ (EXCELLENT)
+
+================================================================================
+END OF REMEDIATION GUIDE
+================================================================================

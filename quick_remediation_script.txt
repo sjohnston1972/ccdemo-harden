@@ -1,0 +1,240 @@
+!==============================================================================
+! QUICK REMEDIATION SCRIPT - 192.168.20.117
+! WARNING: Review and customize before applying!
+! Replace <PLACEHOLDERS> with actual values
+!==============================================================================
+
+! BACKUP CONFIGURATION FIRST
+copy running-config tftp://backup-server/hostname-pre-hardening.cfg
+
+!==============================================================================
+! SECTION 1: HIGH PRIORITY (Apply in Order)
+!==============================================================================
+
+!--- NTP Authentication ---
+configure terminal
+ntp authentication-key 1 md5 <YOUR_SECURE_NTP_KEY>
+ntp authenticate
+ntp trusted-key 1
+ntp server <YOUR_NTP_SERVER_IP> key 1
+exit
+
+!--- SNMPv3 Security (Disable SNMPv2c first) ---
+configure terminal
+no snmp-server community public
+no snmp-server community private
+snmp-server group SNMPV3_GROUP v3 priv
+snmp-server user SNMPV3_USER SNMPV3_GROUP v3 auth sha <AUTH_PASS> priv aes 128 <PRIV_PASS>
+access-list 99 permit <MGMT_NETWORK> <WILDCARD>
+snmp-server access SNMPV3_GROUP v3 priv 99
+exit
+
+!--- Management ACL (CRITICAL - Verify networks first!) ---
+configure terminal
+access-list 10 remark === Management Access ===
+access-list 10 permit <MGMT_NETWORK_1> <WILDCARD_1>
+access-list 10 permit <MGMT_NETWORK_2> <WILDCARD_2>
+access-list 10 deny any log
+line vty 0 4
+ access-class 10 in
+exit
+! TEST SSH ACCESS BEFORE PROCEEDING!
+
+!--- Disable HTTP/HTTPS ---
+configure terminal
+no ip http server
+no ip http secure-server
+exit
+
+!--- DHCP Snooping (Adjust VLANs and interfaces) ---
+configure terminal
+ip dhcp snooping
+ip dhcp snooping vlan 1-100
+no ip dhcp snooping information option
+interface GigabitEthernet0/1
+ ip dhcp snooping trust
+ exit
+interface range GigabitEthernet0/2 - 24
+ ip dhcp snooping limit rate 10
+ exit
+exit
+
+!--- Dynamic ARP Inspection (Requires DHCP Snooping) ---
+configure terminal
+ip arp inspection vlan 1-100
+interface GigabitEthernet0/1
+ ip arp inspection trust
+ exit
+interface range GigabitEthernet0/2 - 24
+ ip arp inspection limit rate 15
+ exit
+exit
+
+!--- BPDU Guard ---
+configure terminal
+spanning-tree portfast bpduguard default
+interface range GigabitEthernet0/2 - 24
+ spanning-tree portfast
+ exit
+exit
+
+!--- Basic Control Plane Policing ---
+configure terminal
+access-list 120 permit ospf any any
+access-list 120 permit eigrp any any
+access-list 121 permit tcp any any eq 22
+access-list 121 permit udp any any eq snmp
+access-list 122 permit icmp any any
+access-list 123 permit ip any any
+!
+class-map match-any CoPP-CRITICAL
+ match access-group 120
+class-map match-any CoPP-IMPORTANT
+ match access-group 121
+class-map match-any CoPP-NORMAL
+ match access-group 122
+class-map match-any CoPP-UNDESIRABLE
+ match access-group 123
+!
+policy-map CoPP-POLICY
+ class CoPP-CRITICAL
+  police 8000 1500 1500 conform-action transmit exceed-action transmit
+ class CoPP-IMPORTANT
+  police 4000 1500 1500 conform-action transmit exceed-action drop
+ class CoPP-NORMAL
+  police 2000 1500 1500 conform-action transmit exceed-action drop
+ class CoPP-UNDESIRABLE
+  police 500 1500 1500 conform-action drop exceed-action drop
+!
+control-plane
+ service-policy input CoPP-POLICY
+exit
+
+!--- AAA with TACACS+ (CRITICAL - Test before disconnecting!) ---
+configure terminal
+aaa new-model
+tacacs server TACACS-SERVER-1
+ address ipv4 <TACACS_SERVER_IP>
+ key <TACACS_SECRET>
+ exit
+aaa group server tacacs+ TACACS-GROUP
+ server name TACACS-SERVER-1
+ exit
+aaa authentication login default group TACACS-GROUP local
+aaa authentication enable default group TACACS-GROUP enable
+aaa authorization exec default group TACACS-GROUP local
+aaa authorization commands 15 default group TACACS-GROUP local
+aaa accounting exec default start-stop group TACACS-GROUP
+aaa accounting commands 15 default start-stop group TACACS-GROUP
+exit
+! TEST AAA: test aaa group TACACS-GROUP <user> <pass> new-code
+
+!==============================================================================
+! SECTION 2: MEDIUM PRIORITY
+!==============================================================================
+
+!--- SSH Hardening ---
+configure terminal
+ip ssh authentication-retries 3
+ip ssh time-out 60
+exit
+
+!--- Syslog Configuration ---
+configure terminal
+logging host <SYSLOG_SERVER_IP>
+logging trap informational
+service timestamps log datetime msec show-timezone
+logging source-interface <MGMT_INTERFACE>
+logging buffered 16384 informational
+exit
+
+!--- CDP Security (Option 1: Disable globally) ---
+configure terminal
+no cdp run
+exit
+
+!--- OR (Option 2: Disable on untrusted ports only) ---
+configure terminal
+cdp run
+interface range GigabitEthernet0/2 - 24
+ no cdp enable
+ exit
+exit
+
+!--- Additional Hardening ---
+configure terminal
+no ip source-route
+spanning-tree loopguard default
+exit
+
+!==============================================================================
+! SECTION 3: LOW PRIORITY (Compliance)
+!==============================================================================
+
+!--- Login Banner ---
+configure terminal
+banner login ^C
+================================================================================
+                          AUTHORIZED ACCESS ONLY
+================================================================================
+This system is for authorized users only. Unauthorized access is prohibited
+and monitored. By accessing this system, you consent to monitoring.
+================================================================================
+^C
+exit
+
+!--- Disable Legacy Services ---
+configure terminal
+no ip finger
+no service pad
+no ip bootp server
+no ip domain-lookup
+no service config
+exit
+
+!--- Additional Security ---
+configure terminal
+service tcp-keepalives-in
+service tcp-keepalives-out
+security passwords min-length 10
+exit
+
+!==============================================================================
+! SAVE AND VERIFY
+!==============================================================================
+
+! Save configuration
+write memory
+
+! Verify critical services
+show ip ssh
+show aaa servers
+show ntp status
+show ip dhcp snooping
+show ip arp inspection
+show spanning-tree summary
+show policy-map control-plane
+show logging
+show access-lists
+
+!==============================================================================
+! POST-CONFIGURATION: Re-run audit
+!==============================================================================
+! From your workstation:
+! python cisco_audit.py --non-interactive --format json
+! Expected new compliance score: 90%+
+
+!==============================================================================
+! EMERGENCY ROLLBACK (if issues occur)
+!==============================================================================
+! From console:
+! config t
+! line vty 0 4
+!  no access-class 10 in
+! exit
+! no aaa new-model
+! exit
+!
+! Or restore from backup:
+! copy tftp://backup-server/hostname-pre-hardening.cfg running-config
+!==============================================================================
