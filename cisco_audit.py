@@ -15,6 +15,11 @@ import csv
 import logging
 import argparse
 import socket
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.mime.base import MIMEBase
+from email import encoders
 from datetime import datetime
 from dotenv import load_dotenv
 import paramiko
@@ -54,7 +59,8 @@ class CiscoSecurityAuditor:
             'output': '.',
             'format': 'json',
             'verbose': False,
-            'dry_run': False
+            'dry_run': False,
+            'email': False
         })()
 
         # Configure logging
@@ -319,7 +325,7 @@ class CiscoSecurityAuditor:
                 "check": lambda out: "transport input ssh" in out.lower() and "telnet" not in out.lower(),
                 "risk": "CRITICAL",
                 "impact": "Telnet transmits credentials in cleartext over the network",
-                "recommendation": "Configure: line vty 0 15 → transport input ssh"
+                "recommendation": "Configure: line vty 0 15 -> transport input ssh"
             },
             {
                 "name": "Login Banner Configured",
@@ -335,7 +341,7 @@ class CiscoSecurityAuditor:
                 "check": lambda out: bool(re.search(r'exec-timeout\s+\d+', out, re.IGNORECASE)),
                 "risk": "MEDIUM",
                 "impact": "Idle sessions can be exploited if left unattended",
-                "recommendation": "Configure: line vty 0 15 → exec-timeout 10 0"
+                "recommendation": "Configure: line vty 0 15 -> exec-timeout 10 0"
             },
             {
                 "name": "Strong Password Policy",
@@ -400,7 +406,7 @@ class CiscoSecurityAuditor:
                 "check": lambda out: bool(re.search(r'access-class\s+\S+\s+in', out, re.IGNORECASE)),
                 "risk": "HIGH",
                 "impact": "Unrestricted management access from any network increases attack surface",
-                "recommendation": "Configure: access-list [#] permit [mgmt-network], line vty 0 15 → access-class [#] in"
+                "recommendation": "Configure: access-list [#] permit [mgmt-network], line vty 0 15 -> access-class [#] in"
             },
             {
                 "name": "Logging Timestamps",
@@ -800,24 +806,407 @@ Verify with: {self._get_verification_command(result['name'])}
         }
         return command_map.get(check_name, "show running-config")
 
+    def _generate_audit_summary(self, filename, report_data, timestamp):
+        """Generate AUDIT_SUMMARY markdown file (REQUIRED per CLAUDE.md)"""
+        failed_results = [r for r in self.audit_results if not r['passed']]
+        risk_counts = {'CRITICAL': 0, 'HIGH': 0, 'MEDIUM': 0, 'LOW': 0}
+        for result in failed_results:
+            risk_counts[result['risk']] = risk_counts.get(result['risk'], 0) + 1
+
+        with open(filename, 'w', encoding='utf-8') as f:
+            f.write(f"# Security Audit Summary Report\n\n")
+            f.write(f"**Generated:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+            f.write(f"---\n\n")
+
+            # Device Information
+            f.write(f"## Device Information\n\n")
+            f.write(f"| Property | Value |\n")
+            f.write(f"|----------|-------|\n")
+            f.write(f"| Hostname | {report_data['device_info']['hostname']} |\n")
+            f.write(f"| IP Address | {report_data['device_info']['ip_address']} |\n")
+            f.write(f"| Platform | {report_data['device_info']['platform']} |\n")
+            f.write(f"| Model | {report_data['device_info']['model']} |\n")
+            f.write(f"| IOS Version | {report_data['device_info']['version']} |\n")
+            f.write(f"| Audit Date | {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} |\n\n")
+
+            # Executive Summary
+            f.write(f"## Executive Summary\n\n")
+            compliance_score = report_data['summary']['compliance_score']
+            status = 'CRITICAL - IMMEDIATE ACTION REQUIRED' if compliance_score < 60 else 'NEEDS IMPROVEMENT' if compliance_score < 75 else 'GOOD' if compliance_score < 90 else 'EXCELLENT'
+            f.write(f"**Overall Compliance Score:** {compliance_score}%\n\n")
+            f.write(f"**Status:** {status}\n\n")
+            f.write(f"### Summary Statistics\n\n")
+            f.write(f"- **Total Checks:** {report_data['summary']['total_checks']}\n")
+            f.write(f"- **Passed:** {report_data['summary']['passed']}\n")
+            f.write(f"- **Failed:** {report_data['summary']['failed']}\n\n")
+
+            f.write(f"### Risk Distribution\n\n")
+            f.write(f"| Risk Level | Count |\n")
+            f.write(f"|------------|-------|\n")
+            for risk in ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW']:
+                if risk_counts[risk] > 0:
+                    f.write(f"| {risk} | {risk_counts[risk]} |\n")
+            f.write(f"\n")
+
+            # Detailed Findings
+            f.write(f"## Detailed Findings\n\n")
+            if failed_results:
+                for risk_level in ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW']:
+                    risk_findings = [r for r in failed_results if r['risk'] == risk_level]
+                    if risk_findings:
+                        f.write(f"### {risk_level} Risk Issues\n\n")
+                        for idx, result in enumerate(risk_findings, 1):
+                            f.write(f"#### {idx}. {result['name']}\n\n")
+                            f.write(f"**Category:** {result['category']}\n\n")
+                            f.write(f"**Impact:**\n{result['impact']}\n\n")
+                            f.write(f"**Recommendation:**\n{result['recommendation']}\n\n")
+                            f.write(f"---\n\n")
+            else:
+                f.write(f"No security issues detected. All checks passed.\n\n")
+
+            # Recommendations Summary
+            f.write(f"## Recommendations Summary\n\n")
+            f.write(f"Priority remediation actions based on risk level:\n\n")
+            if risk_counts['CRITICAL'] > 0 or risk_counts['HIGH'] > 0:
+                f.write(f"1. **IMMEDIATE:** Address {risk_counts['CRITICAL']} CRITICAL and {risk_counts['HIGH']} HIGH risk findings\n")
+            if risk_counts['MEDIUM'] > 0:
+                f.write(f"2. **SHORT-TERM:** Resolve {risk_counts['MEDIUM']} MEDIUM risk findings within 30 days\n")
+            if risk_counts['LOW'] > 0:
+                f.write(f"3. **PLANNED:** Address {risk_counts['LOW']} LOW risk findings in next maintenance window\n")
+            f.write(f"\n")
+
+            # Next Steps
+            f.write(f"## Next Steps\n\n")
+            f.write(f"1. Review the Pre-Deployment Checklist: `PRE_DEPLOYMENT_CHECKLIST_{report_data['device_info']['ip_address']}-{timestamp}.md`\n")
+            f.write(f"2. Review remediation commands: `remediation_commands_{report_data['device_info']['ip_address']}-{timestamp}.txt`\n")
+            f.write(f"3. Schedule maintenance window for critical fixes\n")
+            f.write(f"4. Test remediation commands in lab environment first\n")
+            f.write(f"5. Create change control ticket\n")
+            f.write(f"6. Execute changes with proper backout plan\n")
+            f.write(f"7. Re-run audit to verify compliance improvement\n\n")
+
+            f.write(f"---\n\n")
+            f.write(f"*Report generated by Cisco Network Device Hardening Auditor*\n")
+
+    def _generate_pre_deployment_checklist(self, filename, report_data, timestamp):
+        """Generate PRE_DEPLOYMENT_CHECKLIST markdown file (REQUIRED per CLAUDE.md)"""
+        with open(filename, 'w', encoding='utf-8') as f:
+            f.write(f"# Pre-Deployment Checklist\n\n")
+            f.write(f"**Device:** {report_data['device_info']['hostname']} ({report_data['device_info']['ip_address']})\n\n")
+            f.write(f"**Date:** {datetime.now().strftime('%Y-%m-%d')}\n\n")
+            f.write(f"**Auditor:** [Enter Name]\n\n")
+            f.write(f"---\n\n")
+
+            f.write(f"## CRITICAL: Mandatory Pre-Deployment Steps\n\n")
+            f.write(f"Complete ALL items before applying any configuration changes:\n\n")
+            f.write(f"### 1. Preparation\n\n")
+            f.write(f"- [ ] Change control ticket created and approved\n")
+            f.write(f"- [ ] Maintenance window scheduled\n")
+            f.write(f"- [ ] Network team notified\n")
+            f.write(f"- [ ] Out-of-band console access verified and available\n")
+            f.write(f"- [ ] Backup administrator credentials tested\n")
+            f.write(f"- [ ] Full configuration backup saved to secure location\n")
+            f.write(f"- [ ] Running-config saved: `copy running-config startup-config`\n\n")
+
+            f.write(f"### 2. Lab Testing (REQUIRED)\n\n")
+            f.write(f"- [ ] Lab device with same platform/version available\n")
+            f.write(f"- [ ] All remediation commands tested in lab\n")
+            f.write(f"- [ ] Configuration validated to not break connectivity\n")
+            f.write(f"- [ ] Management access verified after changes\n")
+            f.write(f"- [ ] No syntax errors encountered\n\n")
+
+            f.write(f"### 3. Risk Assessment\n\n")
+            f.write(f"- [ ] Impact on production services assessed\n")
+            f.write(f"- [ ] Potential downtime documented\n")
+            f.write(f"- [ ] Affected users/systems identified\n")
+            f.write(f"- [ ] Business stakeholders notified\n\n")
+
+            f.write(f"### 4. Rollback Procedures\n\n")
+            f.write(f"- [ ] Configuration backup file path documented: `_______________`\n")
+            f.write(f"- [ ] Rollback commands prepared and tested\n")
+            f.write(f"- [ ] Rollback timeline estimated (< 5 minutes)\n")
+            f.write(f"- [ ] Emergency rollback procedure: `configure replace flash:backup-config force`\n\n")
+
+            f.write(f"---\n\n")
+
+            f.write(f"## Critical Change Validation Steps\n\n")
+            f.write(f"Execute AFTER applying configuration changes:\n\n")
+            f.write(f"### Connectivity Verification\n\n")
+            f.write(f"- [ ] Console access still available\n")
+            f.write(f"- [ ] SSH access working: `ssh {report_data['device_info']['ip_address']}`\n")
+            f.write(f"- [ ] Management interface responding to ping\n")
+            f.write(f"- [ ] No error messages in logs: `show logging | include ERR`\n\n")
+
+            f.write(f"### Configuration Verification\n\n")
+            f.write(f"- [ ] All commands applied successfully\n")
+            f.write(f"- [ ] No unexpected configuration changes: `show archive config differences`\n")
+            f.write(f"- [ ] Configuration saved: `copy running-config startup-config`\n\n")
+
+            f.write(f"### Service Verification\n\n")
+            f.write(f"- [ ] Routing protocols stable: `show ip route summary`\n")
+            f.write(f"- [ ] Spanning-tree topology stable: `show spanning-tree summary`\n")
+            f.write(f"- [ ] No interface errors: `show interfaces | include error`\n")
+            f.write(f"- [ ] AAA authentication working (if configured)\n")
+            f.write(f"- [ ] SNMP monitoring operational (if configured)\n\n")
+
+            f.write(f"---\n\n")
+
+            f.write(f"## Implementation Log\n\n")
+            f.write(f"**Start Time:** _______________\n\n")
+            f.write(f"**Commands Applied:**\n")
+            f.write(f"```\n")
+            f.write(f"[Paste configuration commands here]\n")
+            f.write(f"```\n\n")
+            f.write(f"**Issues Encountered:**\n")
+            f.write(f"- [ ] None\n")
+            f.write(f"- [ ] [Describe issue]: _______________\n\n")
+            f.write(f"**Resolution:**\n")
+            f.write(f"_______________\n\n")
+            f.write(f"**End Time:** _______________\n\n")
+            f.write(f"**Total Duration:** _______________\n\n")
+
+            f.write(f"---\n\n")
+
+            f.write(f"## Success Criteria\n\n")
+            f.write(f"Mark as SUCCESSFUL only if ALL criteria met:\n\n")
+            f.write(f"- [ ] All critical and high-priority findings resolved\n")
+            f.write(f"- [ ] No loss of connectivity\n")
+            f.write(f"- [ ] No service disruption\n")
+            f.write(f"- [ ] All validation checks passed\n")
+            f.write(f"- [ ] Configuration saved to startup-config\n")
+            f.write(f"- [ ] Post-change audit shows compliance improvement\n\n")
+
+            f.write(f"**Final Status:** [ ] SUCCESS  [ ] ROLLBACK REQUIRED\n\n")
+
+            f.write(f"**Approver Signature:** _______________  **Date:** _______________\n\n")
+
+            f.write(f"---\n\n")
+            f.write(f"*Generated by Cisco Network Device Hardening Auditor*\n")
+
+    def _generate_remediation_commands(self, filename, report_data, timestamp):
+        """Generate remediation_commands text file (REQUIRED per CLAUDE.md)"""
+        failed_results = [r for r in self.audit_results if not r['passed']]
+
+        with open(filename, 'w', encoding='utf-8') as f:
+            f.write(f"Cisco Network Device Security Remediation Commands\n")
+            f.write(f"=" * 70 + "\n\n")
+            f.write(f"Device: {report_data['device_info']['hostname']} ({report_data['device_info']['ip_address']})\n")
+            f.write(f"Platform: {report_data['device_info']['platform']}\n")
+            f.write(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+            f.write(f"CRITICAL WARNING:\n")
+            f.write(f"- Test ALL commands in lab environment first\n")
+            f.write(f"- Create configuration backup before making changes\n")
+            f.write(f"- Apply changes during maintenance window only\n")
+            f.write(f"- Have console access available during implementation\n")
+            f.write(f"- Review Pre-Deployment Checklist before proceeding\n\n")
+            f.write(f"=" * 70 + "\n\n")
+
+            # Group findings by risk level
+            for risk_level in ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW']:
+                risk_findings = [r for r in failed_results if r['risk'] == risk_level]
+                if risk_findings:
+                    f.write(f"\n{'#' * 70}\n")
+                    f.write(f"# {risk_level} PRIORITY FIXES\n")
+                    f.write(f"{'#' * 70}\n\n")
+
+                    for idx, result in enumerate(risk_findings, 1):
+                        f.write(f"--- {risk_level} #{idx}: {result['name']} ---\n\n")
+                        f.write(f"Category: {result['category']}\n")
+                        f.write(f"Impact: {result['impact']}\n\n")
+
+                        # Extract configuration commands from recommendations
+                        f.write(f"Configuration Commands:\n")
+                        f.write(f"configure terminal\n")
+
+                        # Parse recommendation to extract commands
+                        recommendation = result['recommendation']
+                        if 'Configure:' in recommendation:
+                            commands = recommendation.split('Configure:')[1].strip()
+                            # Clean up the command
+                            commands = commands.replace('->', '\n  ')
+                            f.write(f"  {commands}\n")
+                        else:
+                            f.write(f"  ! {recommendation}\n")
+
+                        f.write(f"exit\n")
+                        f.write(f"!\n")
+                        f.write(f"! Verification command:\n")
+                        f.write(f"! {self._get_verification_command(result['name'])}\n")
+                        f.write(f"\n")
+
+            # Verification section
+            f.write(f"\n{'#' * 70}\n")
+            f.write(f"# POST-CONFIGURATION VERIFICATION\n")
+            f.write(f"{'#' * 70}\n\n")
+            f.write(f"! Execute these commands to verify changes:\n\n")
+            f.write(f"show running-config | section line vty\n")
+            f.write(f"show ip ssh\n")
+            f.write(f"show running-config | include aaa\n")
+            f.write(f"show running-config | include ntp\n")
+            f.write(f"show running-config | include logging\n")
+            f.write(f"show running-config | include snmp\n")
+            f.write(f"show running-config | section control-plane\n")
+            f.write(f"show ip dhcp snooping\n")
+            f.write(f"show ip arp inspection\n")
+            f.write(f"show spanning-tree summary\n\n")
+
+            # Save configuration
+            f.write(f"\n{'#' * 70}\n")
+            f.write(f"# SAVE CONFIGURATION\n")
+            f.write(f"{'#' * 70}\n\n")
+            f.write(f"! After verifying all changes:\n")
+            f.write(f"copy running-config startup-config\n\n")
+
+            # Rollback commands
+            f.write(f"\n{'#' * 70}\n")
+            f.write(f"# ROLLBACK COMMANDS (if needed)\n")
+            f.write(f"{'#' * 70}\n\n")
+            f.write(f"! Emergency rollback to previous configuration:\n")
+            f.write(f"configure replace flash:backup-config force\n\n")
+            f.write(f"! Or restore from startup-config:\n")
+            f.write(f"copy startup-config running-config\n\n")
+            f.write(f"! Manual rollback (undo specific changes):\n")
+            f.write(f"configure terminal\n")
+            f.write(f"  ! Use 'no' commands to reverse changes\n")
+            f.write(f"  ! Example: no service password-encryption\n")
+            f.write(f"exit\n\n")
+
+            f.write(f"=" * 70 + "\n")
+            f.write(f"End of Remediation Commands\n")
+            f.write(f"=" * 70 + "\n")
+
+    def send_email_report(self, report_files):
+        """Send audit results via email using environment variables"""
+        try:
+            # Load email configuration from environment
+            smtp_server = os.getenv('SMTP_SERVER')
+            smtp_port = int(os.getenv('SMTP_PORT', 587))
+            sender_email = os.getenv('SENDER_EMAIL')
+            sender_password = os.getenv('SENDER_PASSWORD')
+            recipient_email = os.getenv('RECIPIENT_EMAIL')
+            sender_name = os.getenv('SENDER_NAME', 'Network Audit')
+
+            if not all([smtp_server, sender_email, sender_password, recipient_email]):
+                console.print("[bold red]✗[/bold red] Email configuration missing in .env file")
+                console.print("[yellow]Required: SMTP_SERVER, SMTP_PORT, SENDER_EMAIL, SENDER_PASSWORD, RECIPIENT_EMAIL[/yellow]")
+                return False
+
+            console.print(f"\n[bold cyan]Preparing email report...[/bold cyan]")
+
+            # Create message
+            msg = MIMEMultipart()
+            msg['From'] = f"{sender_name} <{sender_email}>"
+            msg['To'] = recipient_email
+            msg['Subject'] = f"Network Security Audit Report - {self.device_info.get('hostname', self.host)} - {datetime.now().strftime('%Y-%m-%d')}"
+
+            # Email body with audit summary
+            total_checks = len(self.audit_results)
+            passed_checks = sum(1 for r in self.audit_results if r['passed'])
+            failed_checks = total_checks - passed_checks
+            compliance_score = round((passed_checks / total_checks * 100) if total_checks > 0 else 0, 1)
+
+            # Count risk levels
+            risk_counts = {'CRITICAL': 0, 'HIGH': 0, 'MEDIUM': 0, 'LOW': 0}
+            for result in self.audit_results:
+                if not result['passed']:
+                    risk_counts[result['risk']] = risk_counts.get(result['risk'], 0) + 1
+
+            body = f"""
+Network Security Audit Report
+========================================
+
+Device Information:
+- Hostname: {self.device_info.get('hostname', 'Unknown')}
+- IP Address: {self.host}
+- Platform: {self.device_info.get('platform', 'Unknown')}
+- Model: {self.device_info.get('model', 'Unknown')}
+- IOS Version: {self.device_info.get('ios_version', 'Unknown')}
+- Audit Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+Audit Summary:
+========================================
+Total Checks Performed: {total_checks}
+Checks Passed: {passed_checks}
+Checks Failed: {failed_checks}
+Compliance Score: {compliance_score}%
+
+Risk Distribution:
+- CRITICAL: {risk_counts.get('CRITICAL', 0)}
+- HIGH: {risk_counts['HIGH']}
+- MEDIUM: {risk_counts['MEDIUM']}
+- LOW: {risk_counts['LOW']}
+
+Status: {'CRITICAL - IMMEDIATE ACTION REQUIRED' if compliance_score < 60 else 'NEEDS IMPROVEMENT' if compliance_score < 75 else 'GOOD' if compliance_score < 90 else 'EXCELLENT'}
+
+========================================
+
+Please review the attached detailed audit report for complete findings and remediation recommendations.
+
+This is an automated audit report generated by Cisco Network Device Hardening Auditor.
+"""
+
+            msg.attach(MIMEText(body, 'plain'))
+
+            # Attach report files
+            if not isinstance(report_files, list):
+                report_files = [report_files]
+
+            for file_path in report_files:
+                if file_path and os.path.exists(file_path):
+                    with open(file_path, 'rb') as f:
+                        part = MIMEBase('application', 'octet-stream')
+                        part.set_payload(f.read())
+                        encoders.encode_base64(part)
+                        part.add_header('Content-Disposition',
+                                      f'attachment; filename={os.path.basename(file_path)}')
+                        msg.attach(part)
+                        console.print(f"[bold green]✓[/bold green] Attached: [cyan]{os.path.basename(file_path)}[/cyan]")
+
+            # Send email
+            console.print(f"[bold blue]Connecting to SMTP server {smtp_server}:{smtp_port}...[/bold blue]")
+            with smtplib.SMTP(smtp_server, smtp_port) as server:
+                server.starttls()
+                server.login(sender_email, sender_password)
+                server.send_message(msg)
+
+            console.print(f"[bold green]✓[/bold green] Email successfully sent to: [cyan]{recipient_email}[/cyan]")
+            return True
+
+        except smtplib.SMTPAuthenticationError:
+            console.print("[bold red]✗[/bold red] SMTP Authentication failed - Check email credentials")
+            logging.error("SMTP Authentication failed")
+            return False
+        except Exception as e:
+            console.print(f"[bold red]✗[/bold red] Failed to send email: {str(e)}")
+            logging.error(f"Email send failed: {e}", exc_info=True)
+            return False
+
     def export_results(self, export_format=None):
-        """Export audit results in multiple formats (JSON, CSV, Markdown)"""
+        """Export ALL required audit files per CLAUDE.md standards"""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         hostname = self.device_info.get('hostname', 'unknown')
-
-        # Use format from args if not specified
-        if export_format is None:
-            export_format = self.args.format
+        device_identifier = self.host if hostname == 'unknown' or hostname == 'hostname' else hostname
 
         # Prepare report data
+        total_checks = len(self.audit_results)
+        passed_checks = sum(1 for r in self.audit_results if r['passed'])
+        failed_checks = total_checks - passed_checks
+        compliance_score = round((passed_checks / total_checks * 100) if total_checks > 0 else 0, 1)
+
         report_data = {
             'audit_timestamp': datetime.now().isoformat(),
-            'device_info': self.device_info,
+            'device_info': {
+                'hostname': hostname,
+                'ip_address': self.host,
+                'platform': self.device_info.get('platform', 'Unknown'),
+                'model': self.device_info.get('model', 'Unknown'),
+                'version': self.device_info.get('ios_version', 'Unknown')
+            },
             'summary': {
-                'total_checks': len(self.audit_results),
-                'passed': sum(1 for r in self.audit_results if r['passed']),
-                'failed': sum(1 for r in self.audit_results if not r['passed']),
-                'compliance_score': round((sum(1 for r in self.audit_results if r['passed']) / len(self.audit_results) * 100) if self.audit_results else 0, 1)
+                'total_checks': total_checks,
+                'passed': passed_checks,
+                'failed': failed_checks,
+                'compliance_score': compliance_score
             },
             'findings': self.audit_results
         }
@@ -827,55 +1216,43 @@ Verify with: {self._get_verification_command(result['name'])}
         if not os.path.exists(output_dir):
             os.makedirs(output_dir)
 
+        generated_files = []
+
         try:
-            if export_format == 'json':
-                filename = os.path.join(output_dir, f"audit_report_{hostname}_{timestamp}.json")
-                with open(filename, 'w') as f:
-                    json.dump(report_data, f, indent=2)
-                console.print(f"\n[bold green]✓[/bold green] JSON report exported to: [cyan]{filename}[/cyan]")
+            console.print("\n[bold cyan]Generating Required Audit Files (per CLAUDE.md standards)...[/bold cyan]")
 
-            elif export_format == 'csv':
-                filename = os.path.join(output_dir, f"audit_report_{hostname}_{timestamp}.csv")
-                with open(filename, 'w', newline='') as f:
-                    writer = csv.writer(f)
-                    writer.writerow(['Category', 'Check Name', 'Risk Level', 'Status', 'Impact', 'Recommendation'])
-                    for result in self.audit_results:
-                        writer.writerow([
-                            result['category'],
-                            result['name'],
-                            result['risk'],
-                            'PASS' if result['passed'] else 'FAIL',
-                            result['impact'],
-                            result['recommendation']
-                        ])
-                console.print(f"\n[bold green]✓[/bold green] CSV report exported to: [cyan]{filename}[/cyan]")
+            # 1. REQUIRED: Machine-Readable Audit Report (JSON)
+            json_filename = os.path.join(output_dir, f"audit_report_{device_identifier}_{timestamp}.json")
+            with open(json_filename, 'w') as f:
+                json.dump(report_data, f, indent=2)
+            console.print(f"[bold green]✓[/bold green] JSON report: [cyan]{json_filename}[/cyan]")
+            generated_files.append(json_filename)
 
-            elif export_format == 'markdown':
-                filename = os.path.join(output_dir, f"audit_report_{hostname}_{timestamp}.md")
-                with open(filename, 'w') as f:
-                    f.write(f"# Security Audit Report\n\n")
-                    f.write(f"**Device:** {hostname}\n\n")
-                    f.write(f"**IP Address:** {self.device_info.get('ip_address', self.host)}\n\n")
-                    f.write(f"**Audit Date:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
-                    f.write(f"## Summary\n\n")
-                    f.write(f"- **Total Checks:** {report_data['summary']['total_checks']}\n")
-                    f.write(f"- **Passed:** {report_data['summary']['passed']}\n")
-                    f.write(f"- **Failed:** {report_data['summary']['failed']}\n")
-                    f.write(f"- **Compliance Score:** {report_data['summary']['compliance_score']}%\n\n")
-                    f.write(f"## Findings\n\n")
-                    for idx, result in enumerate([r for r in self.audit_results if not r['passed']], 1):
-                        f.write(f"### Finding #{idx}: {result['name']}\n\n")
-                        f.write(f"- **Category:** {result['category']}\n")
-                        f.write(f"- **Risk Level:** {result['risk']}\n")
-                        f.write(f"- **Impact:** {result['impact']}\n")
-                        f.write(f"- **Recommendation:** {result['recommendation']}\n\n")
-                console.print(f"\n[bold green]✓[/bold green] Markdown report exported to: [cyan]{filename}[/cyan]")
+            # 2. REQUIRED: AUDIT_SUMMARY (Comprehensive Markdown)
+            summary_filename = os.path.join(output_dir, f"AUDIT_SUMMARY_{device_identifier}-{timestamp}.md")
+            self._generate_audit_summary(summary_filename, report_data, timestamp)
+            console.print(f"[bold green]✓[/bold green] Audit summary: [cyan]{summary_filename}[/cyan]")
+            generated_files.append(summary_filename)
 
-            return filename
+            # 3. REQUIRED: PRE_DEPLOYMENT_CHECKLIST
+            checklist_filename = os.path.join(output_dir, f"PRE_DEPLOYMENT_CHECKLIST_{device_identifier}-{timestamp}.md")
+            self._generate_pre_deployment_checklist(checklist_filename, report_data, timestamp)
+            console.print(f"[bold green]✓[/bold green] Pre-deployment checklist: [cyan]{checklist_filename}[/cyan]")
+            generated_files.append(checklist_filename)
+
+            # 4. REQUIRED: remediation_commands
+            remediation_filename = os.path.join(output_dir, f"remediation_commands_{device_identifier}-{timestamp}.txt")
+            self._generate_remediation_commands(remediation_filename, report_data, timestamp)
+            console.print(f"[bold green]✓[/bold green] Remediation commands: [cyan]{remediation_filename}[/cyan]")
+            generated_files.append(remediation_filename)
+
+            console.print(f"\n[bold green]✓ All {len(generated_files)} required audit files generated successfully[/bold green]")
+
+            return generated_files
 
         except Exception as e:
-            logging.error(f"Failed to export report: {e}")
-            console.print(f"[bold red]✗[/bold red] Failed to export report: {str(e)}")
+            logging.error(f"Failed to export reports: {e}")
+            console.print(f"[bold red]✗[/bold red] Failed to export reports: {str(e)}")
             return None
 
     def disconnect(self):
@@ -910,12 +1287,19 @@ Verify with: {self._get_verification_command(result['name'])}
             self.generate_report()
 
             # Export results (auto-export in non-interactive mode)
+            report_files = None
             if self.args.non_interactive:
                 console.print("\n[bold cyan]Auto-exporting results (non-interactive mode)[/bold cyan]")
-                self.export_results()
+                report_files = self.export_results()
             else:
                 if Confirm.ask("\n[bold cyan]Export detailed results?[/bold cyan]", default=True):
-                    self.export_results()
+                    report_files = self.export_results()
+
+            # Send email if requested
+            if self.args.email and report_files:
+                self.send_email_report(report_files)
+            elif self.args.email and not report_files:
+                console.print("[bold yellow]⚠[/bold yellow] Cannot send email - no report files generated")
 
             return True
 
@@ -966,6 +1350,8 @@ Examples:
                        help='Enable detailed logging')
     parser.add_argument('--dry-run', action='store_true',
                        help='Show commands without executing (testing mode)')
+    parser.add_argument('--email', '-e', action='store_true',
+                       help='Email the audit results (requires email config in .env)')
 
     args = parser.parse_args()
 
