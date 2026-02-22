@@ -1,0 +1,342 @@
+{
+  "audit_timestamp": "2026-02-20T20:10:53.504580",
+  "device_info": {
+    "hostname": "hostname",
+    "ip_address": "192.168.20.117",
+    "platform": "IOS",
+    "model": "Unknown",
+    "version": "Cisco"
+  },
+  "summary": {
+    "total_checks": 36,
+    "passed": 17,
+    "failed": 19,
+    "compliance_score": 47.2
+  },
+  "findings": [
+    {
+      "category": "Access Security",
+      "name": "Password Encryption",
+      "risk": "HIGH",
+      "impact": "Passwords stored in cleartext are visible to anyone with config access",
+      "recommendation": "Enable: service password-encryption",
+      "passed": true,
+      "output": "show running-config | include service password-encryption\r\nIOU2#"
+    },
+    {
+      "category": "Access Security",
+      "name": "SSH Version 2 Only",
+      "risk": "HIGH",
+      "impact": "SSHv1 has known cryptographic vulnerabilities",
+      "recommendation": "Configure: ip ssh version 2",
+      "passed": true,
+      "output": "show ip ssh\r\nSSH Enabled - version 2.0\r\nAuthentication methods:publickey,keyboard-interactive,password\r\nAuthentication Publickey Algorithms:ssh-rsa,ecdsa-sha2-nistp256,ecdsa-sha2-nistp384,ecdsa-sha2-nistp521,ssh-ed25519,x509v3-ecdsa-sha2-nistp256,x509v3-ecdsa-sha2-nistp384,x509v3-ecdsa-sha2-nistp521,rsa-sha2-256,rsa-sha2-512,x509v3-rsa2048-sha256\r\nHostkey Algorithms:rsa-sha2-512,rsa-sha2-256,ssh-rsa\r\nEncryption Algorithms:chacha20-poly1305@openssh.com,aes128-gcm@openssh.com,aes256-gcm@openssh.co"
+    },
+    {
+      "category": "Access Security",
+      "name": "Telnet Disabled",
+      "risk": "CRITICAL",
+      "impact": "Telnet transmits credentials in cleartext over the network",
+      "recommendation": "Configure: line vty 0 15 -> transport input ssh",
+      "passed": true,
+      "output": "show running-config | section line vty\r\nline vty 0 4\r\n privilege level 15\r\n transport input ssh\r\nIOU2#"
+    },
+    {
+      "category": "Access Security",
+      "name": "Login Banner Configured",
+      "risk": "LOW",
+      "impact": "Legal warning banners establish unauthorized access policy",
+      "recommendation": "Configure: banner login # [warning message] #",
+      "passed": false,
+      "output": "show running-config | begin banner\r\nIOU2#"
+    },
+    {
+      "category": "Access Security",
+      "name": "Exec Timeout Configured",
+      "risk": "MEDIUM",
+      "impact": "Idle sessions can be exploited if left unattended",
+      "recommendation": "Configure: line vty 0 15 -> exec-timeout 10 0",
+      "passed": true,
+      "output": "show running-config | include exec-timeout\r\n exec-timeout 0 0\r\n exec-timeout 0 0\r\nIOU2#"
+    },
+    {
+      "category": "Access Security",
+      "name": "Strong Password Policy",
+      "risk": "MEDIUM",
+      "impact": "Weak passwords are susceptible to brute-force attacks",
+      "recommendation": "Configure: password policy strength 4, min-length 10",
+      "passed": true,
+      "output": "show running-config | include password policy\r\nIOU2#"
+    },
+    {
+      "category": "Access Security",
+      "name": "SSH Timeout Configured",
+      "risk": "MEDIUM",
+      "impact": "Unresponsive SSH sessions consume resources",
+      "recommendation": "Configure: ip ssh time-out 60",
+      "passed": true,
+      "output": "show running-config | include ip ssh time-out\r\nIOU2#"
+    },
+    {
+      "category": "Access Security",
+      "name": "SSH Authentication Retries Limited",
+      "risk": "MEDIUM",
+      "impact": "Unlimited retries enable password guessing attacks",
+      "recommendation": "Configure: ip ssh authentication-retries 3",
+      "passed": false,
+      "output": "show ip ssh\r\nSSH Enabled - version 2.0\r\nAuthentication methods:publickey,keyboard-interactive,password\r\nAuthentication Publickey Algorithms:ssh-rsa,ecdsa-sha2-nistp256,ecdsa-sha2-nistp384,ecdsa-sha2-nistp521,ssh-ed25519,x509v3-ecdsa-sha2-nistp256,x509v3-ecdsa-sha2-nistp384,x509v3-ecdsa-sha2-nistp521,rsa-sha2-256,rsa-sha2-512,x509v3-rsa2048-sha256\r\nHostkey Algorithms:rsa-sha2-512,rsa-sha2-256,ssh-rsa\r\nEncryption Algorithms:chacha20-poly1305@openssh.com,aes128-gcm@openssh.com,aes256-gcm@openssh.co"
+    },
+    {
+      "category": "Management Plane Security",
+      "name": "NTP Authentication",
+      "risk": "HIGH",
+      "impact": "Unauthenticated NTP can be spoofed, causing time-based attacks",
+      "recommendation": "Configure: ntp authenticate, ntp authentication-key, ntp trusted-key",
+      "passed": false,
+      "output": "show running-config | include ntp\r\nIOU2#"
+    },
+    {
+      "category": "Management Plane Security",
+      "name": "Syslog Configuration",
+      "risk": "MEDIUM",
+      "impact": "Without centralized logging, security events may go undetected",
+      "recommendation": "Configure: logging host [syslog-server], logging trap informational",
+      "passed": false,
+      "output": "show running-config | include logging\r\nlogging discriminator EXCESS severity drops 6 msg-body drops EXCESSCOLL \r\nlogging buffered 50000\r\nlogging console discriminator EXCESS\r\n logging synchronous\r\n logging synchronous\r\nIOU2#"
+    },
+    {
+      "category": "Management Plane Security",
+      "name": "SNMPv3 Security",
+      "risk": "HIGH",
+      "impact": "SNMPv1/v2c community strings transmitted in cleartext",
+      "recommendation": "Configure: snmp-server user [user] [group] v3 auth sha [pass] priv aes 128 [key]",
+      "passed": false,
+      "output": "show running-config | include snmp\r\nIOU2#"
+    },
+    {
+      "category": "Management Plane Security",
+      "name": "Management ACL",
+      "risk": "HIGH",
+      "impact": "Unrestricted management access from any network increases attack surface",
+      "recommendation": "Configure: access-list [#] permit [mgmt-network], line vty 0 15 -> access-class [#] in",
+      "passed": false,
+      "output": "show running-config | section line vty\r\nline vty 0 4\r\n privilege level 15\r\n transport input ssh\r\nIOU2#"
+    },
+    {
+      "category": "Management Plane Security",
+      "name": "Logging Timestamps",
+      "risk": "LOW",
+      "impact": "Accurate timestamps critical for incident response and correlation",
+      "recommendation": "Configure: service timestamps log datetime msec show-timezone",
+      "passed": true,
+      "output": "show running-config | include service timestamps\r\nservice timestamps debug datetime msec\r\nservice timestamps log datetime msec\r\nIOU2#"
+    },
+    {
+      "category": "Service Hardening",
+      "name": "HTTP Server Disabled",
+      "risk": "HIGH",
+      "impact": "HTTP server provides unauthenticated access to device information",
+      "recommendation": "Configure: no ip http server",
+      "passed": false,
+      "output": "show running-config | include ip http\r\nip http server\r\nip http secure-server\r\nIOU2#"
+    },
+    {
+      "category": "Service Hardening",
+      "name": "HTTPS Server Status",
+      "risk": "MEDIUM",
+      "impact": "If HTTPS not required for management, disable to reduce attack surface",
+      "recommendation": "Configure: no ip http secure-server (unless required)",
+      "passed": false,
+      "output": "show running-config | include ip http secure-server\r\nip http secure-server\r\nIOU2#"
+    },
+    {
+      "category": "Service Hardening",
+      "name": "CDP Global Status",
+      "risk": "MEDIUM",
+      "impact": "CDP discloses device information to potential attackers on local network",
+      "recommendation": "Configure: no cdp run (or disable per-interface on untrusted ports)",
+      "passed": false,
+      "output": "show cdp\r\nGlobal CDP information:\r\n\tSending CDP packets every 60 seconds\r\n\tSending a holdtime value of 180 seconds\r\n\tSending CDPv2 advertisements is enabled\r\nIOU2#"
+    },
+    {
+      "category": "Service Hardening",
+      "name": "LLDP Global Status",
+      "risk": "MEDIUM",
+      "impact": "LLDP discloses network topology information",
+      "recommendation": "Configure: no lldp run (or disable per-interface on untrusted ports)",
+      "passed": true,
+      "output": "show lldp\r\n% LLDP is not enabled\r\nIOU2#"
+    },
+    {
+      "category": "Service Hardening",
+      "name": "Finger Service Disabled",
+      "risk": "LOW",
+      "impact": "Finger service can leak user information",
+      "recommendation": "Configure: no ip finger",
+      "passed": false,
+      "output": "show running-config | include ip finger\r\nIOU2#"
+    },
+    {
+      "category": "Service Hardening",
+      "name": "Source Routing Disabled",
+      "risk": "MEDIUM",
+      "impact": "Source routing can be used to bypass network security controls",
+      "recommendation": "Configure: no ip source-route",
+      "passed": false,
+      "output": "show running-config | include ip source-route\r\nIOU2#"
+    },
+    {
+      "category": "Service Hardening",
+      "name": "PAD Service Disabled",
+      "risk": "LOW",
+      "impact": "PAD service is legacy and rarely needed",
+      "recommendation": "Configure: no service pad",
+      "passed": false,
+      "output": "show running-config | include service pad\r\nIOU2#"
+    },
+    {
+      "category": "Network Security Features",
+      "name": "Port Security Status",
+      "risk": "MEDIUM",
+      "impact": "Unauthorized devices can connect to access ports without restriction",
+      "recommendation": "Configure: switchport port-security on access ports",
+      "passed": true,
+      "output": "show port-security\r\nSecure Port  MaxSecureAddr  CurrentAddr  SecurityViolation  Security Action\r\n                (Count)       (Count)          (Count)\r\n---------------------------------------------------------------------------\r\n---------------------------------------------------------------------------\r\nTotal Addresses in System (excluding one mac per port)     : 0\r\nMax Addresses limit in System (excluding one mac per port) : 4096\r\nIOU2#"
+    },
+    {
+      "category": "Network Security Features",
+      "name": "DHCP Snooping",
+      "risk": "HIGH",
+      "impact": "Rogue DHCP servers can redirect traffic and perform MITM attacks",
+      "recommendation": "Configure: ip dhcp snooping, ip dhcp snooping vlan [vlan-range]",
+      "passed": false,
+      "output": "show running-config | include ip dhcp snooping\r\nIOU2#"
+    },
+    {
+      "category": "Network Security Features",
+      "name": "Dynamic ARP Inspection",
+      "risk": "HIGH",
+      "impact": "ARP spoofing enables man-in-the-middle attacks",
+      "recommendation": "Configure: ip arp inspection vlan [vlan-range]",
+      "passed": false,
+      "output": "show running-config | include ip arp inspection\r\nIOU2#"
+    },
+    {
+      "category": "Network Security Features",
+      "name": "IP Source Guard",
+      "risk": "MEDIUM",
+      "impact": "IP spoofing can bypass network access controls",
+      "recommendation": "Configure: ip verify source on access ports",
+      "passed": true,
+      "output": "show running-config | include ip verify source\r\nIOU2#"
+    },
+    {
+      "category": "Network Security Features",
+      "name": "Storm Control",
+      "risk": "MEDIUM",
+      "impact": "Broadcast storms can cause network-wide denial of service",
+      "recommendation": "Configure: storm-control broadcast/multicast level on access ports",
+      "passed": true,
+      "output": "show running-config | include storm-control\r\nIOU2#"
+    },
+    {
+      "category": "Network Security Features",
+      "name": "BPDU Guard",
+      "risk": "HIGH",
+      "impact": "Rogue switches can cause spanning-tree topology manipulation",
+      "recommendation": "Configure: spanning-tree portfast bpduguard default",
+      "passed": false,
+      "output": "show running-config | include spanning-tree\r\nspanning-tree mode rapid-pvst\r\nspanning-tree extend system-id\r\nIOU2#"
+    },
+    {
+      "category": "Network Security Features",
+      "name": "Root Guard",
+      "risk": "MEDIUM",
+      "impact": "Unauthorized devices can become root bridge and disrupt network",
+      "recommendation": "Configure: spanning-tree guard root on non-root ports",
+      "passed": true,
+      "output": "show running-config | include spanning-tree guard root\r\nIOU2#"
+    },
+    {
+      "category": "Network Security Features",
+      "name": "Loop Guard",
+      "risk": "MEDIUM",
+      "impact": "Unidirectional link failures can cause forwarding loops",
+      "recommendation": "Configure: spanning-tree loopguard default",
+      "passed": false,
+      "output": "show running-config | include loopguard\r\nIOU2#"
+    },
+    {
+      "category": "Network Security Features",
+      "name": "Native VLAN Security",
+      "risk": "MEDIUM",
+      "impact": "Default VLAN 1 on trunks vulnerable to VLAN hopping attacks",
+      "recommendation": "Configure: switchport trunk native vlan [unused-vlan] on trunks",
+      "passed": true,
+      "output": "show interfaces trunk\r\nIOU2#"
+    },
+    {
+      "category": "Control Plane Security",
+      "name": "Control Plane Policing",
+      "risk": "HIGH",
+      "impact": "Control plane vulnerable to DoS attacks affecting device stability",
+      "recommendation": "Configure: control-plane, service-policy input [policy-name]",
+      "passed": false,
+      "output": "show running-config | section control-plane\r\ncontrol-plane\r\nIOU2#"
+    },
+    {
+      "category": "Control Plane Security",
+      "name": "CPU Protection",
+      "risk": "HIGH",
+      "impact": "Unprotected CPU can be overwhelmed by malicious traffic",
+      "recommendation": "Implement rate-limiting policies for control plane traffic",
+      "passed": true,
+      "output": "show running-config | include control-plane\r\ncontrol-plane\r\nIOU2#"
+    },
+    {
+      "category": "AAA Configuration",
+      "name": "AAA New Model Enabled",
+      "risk": "HIGH",
+      "impact": "Without AAA, centralized authentication and accounting unavailable",
+      "recommendation": "Configure: aaa new-model",
+      "passed": true,
+      "output": "show running-config | include aaa new-model\r\naaa new-model\r\nIOU2#"
+    },
+    {
+      "category": "AAA Configuration",
+      "name": "TACACS+ Configuration",
+      "risk": "MEDIUM",
+      "impact": "Local authentication only, no centralized identity management",
+      "recommendation": "Configure: tacacs server [name], address ipv4 [ip]",
+      "passed": false,
+      "output": "show running-config | include tacacs\r\nIOU2#"
+    },
+    {
+      "category": "AAA Configuration",
+      "name": "AAA Authentication",
+      "risk": "HIGH",
+      "impact": "No centralized authentication policy enforced",
+      "recommendation": "Configure: aaa authentication login default group tacacs+ local",
+      "passed": false,
+      "output": "show running-config | include aaa authentication\r\nIOU2#"
+    },
+    {
+      "category": "AAA Configuration",
+      "name": "AAA Authorization",
+      "risk": "MEDIUM",
+      "impact": "Command authorization not enforced, users have unlimited access",
+      "recommendation": "Configure: aaa authorization exec default group tacacs+ local",
+      "passed": true,
+      "output": "show running-config | include aaa authorization\r\nIOU2#"
+    },
+    {
+      "category": "AAA Configuration",
+      "name": "AAA Accounting",
+      "risk": "MEDIUM",
+      "impact": "User actions not logged for audit trail and compliance",
+      "recommendation": "Configure: aaa accounting exec/commands default start-stop group tacacs+",
+      "passed": true,
+      "output": "show running-config | include aaa accounting\r\nIOU2#"
+    }
+  ]
+}

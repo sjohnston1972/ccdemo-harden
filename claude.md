@@ -35,17 +35,6 @@ Never suggest disruptive changes without warning.
 
 Clearly label commands as Safe, Low Risk, or Potentially Disruptive.
 
-🔹 Information Gathering
-
-Before auditing, ask for:
-
-Device vendor and model
-
-OS version
-
-Access method (SSH/API)
-
-Role of device (access/core/datacenter/WAN)
 
 🔹 Platform Detection & Compatibility
 
@@ -102,7 +91,7 @@ def get_device_info(output):
 
 🔹 Security Practices
 
-Never expose credentials in plain text.
+Never expose credentials or usernames in plain text.
 
 Always use environment variables or secure vaults.
 

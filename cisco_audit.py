@@ -809,84 +809,166 @@ Verify with: {self._get_verification_command(result['name'])}
     def _generate_audit_summary(self, filename, report_data, timestamp):
         """Generate AUDIT_SUMMARY markdown file (REQUIRED per CLAUDE.md)"""
         failed_results = [r for r in self.audit_results if not r['passed']]
+        passed_results = [r for r in self.audit_results if r['passed']]
         risk_counts = {'CRITICAL': 0, 'HIGH': 0, 'MEDIUM': 0, 'LOW': 0}
         for result in failed_results:
             risk_counts[result['risk']] = risk_counts.get(result['risk'], 0) + 1
 
+        compliance_score = report_data['summary']['compliance_score']
+        total  = report_data['summary']['total_checks']
+        passed = report_data['summary']['passed']
+        failed = report_data['summary']['failed']
+        device = report_data['device_info']
+        ip, host, platform = device['ip_address'], device['hostname'], device['platform']
+        dt_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+        if compliance_score < 60:
+            status, status_icon = 'CRITICAL — IMMEDIATE ACTION REQUIRED', '🔴'
+        elif compliance_score < 75:
+            status, status_icon = 'NEEDS IMPROVEMENT', '🟠'
+        elif compliance_score < 90:
+            status, status_icon = 'GOOD', '🟡'
+        else:
+            status, status_icon = 'EXCELLENT', '🟢'
+
+        # 40-char progress bar
+        filled = int((compliance_score / 100) * 40)
+        bar = '█' * filled + '░' * (40 - filled)
+
+        # Per-category pass/fail counts
+        categories = {}
+        for result in self.audit_results:
+            cat = result['category']
+            categories.setdefault(cat, {'passed': 0, 'failed': 0})
+            if result['passed']:
+                categories[cat]['passed'] += 1
+            else:
+                categories[cat]['failed'] += 1
+
+        risk_icons = {'CRITICAL': '🚨', 'HIGH': '🔴', 'MEDIUM': '🟠', 'LOW': '🟡'}
+
         with open(filename, 'w', encoding='utf-8') as f:
-            f.write(f"# Security Audit Summary Report\n\n")
-            f.write(f"**Generated:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
-            f.write(f"---\n\n")
 
-            # Device Information
-            f.write(f"## Device Information\n\n")
-            f.write(f"| Property | Value |\n")
-            f.write(f"|----------|-------|\n")
-            f.write(f"| Hostname | {report_data['device_info']['hostname']} |\n")
-            f.write(f"| IP Address | {report_data['device_info']['ip_address']} |\n")
-            f.write(f"| Platform | {report_data['device_info']['platform']} |\n")
-            f.write(f"| Model | {report_data['device_info']['model']} |\n")
-            f.write(f"| IOS Version | {report_data['device_info']['version']} |\n")
-            f.write(f"| Audit Date | {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} |\n\n")
+            # ── Header ──────────────────────────────────────────────────────
+            f.write('<div align="center">\n\n')
+            f.write('# 🔒 Network Device Security Audit Report\n\n')
+            f.write(f'**`{ip}`** &nbsp;·&nbsp; {platform} &nbsp;·&nbsp; `{dt_str}`\n\n')
+            f.write('</div>\n\n')
+            f.write('---\n\n')
 
-            # Executive Summary
-            f.write(f"## Executive Summary\n\n")
-            compliance_score = report_data['summary']['compliance_score']
-            status = 'CRITICAL - IMMEDIATE ACTION REQUIRED' if compliance_score < 60 else 'NEEDS IMPROVEMENT' if compliance_score < 75 else 'GOOD' if compliance_score < 90 else 'EXCELLENT'
-            f.write(f"**Overall Compliance Score:** {compliance_score}%\n\n")
-            f.write(f"**Status:** {status}\n\n")
-            f.write(f"### Summary Statistics\n\n")
-            f.write(f"- **Total Checks:** {report_data['summary']['total_checks']}\n")
-            f.write(f"- **Passed:** {report_data['summary']['passed']}\n")
-            f.write(f"- **Failed:** {report_data['summary']['failed']}\n\n")
+            # ── Compliance Score ─────────────────────────────────────────────
+            f.write('## Compliance Score\n\n')
+            f.write('<div align="center">\n\n')
+            f.write(f'# {compliance_score:.1f}%\n\n')
+            f.write(f'`{bar}`\n\n')
+            f.write(f'{status_icon} &nbsp; **{status}**\n\n')
+            f.write(f'| ✅ Passed | ❌ Failed | 📋 Total |\n')
+            f.write(f'|:--------:|:--------:|:-------:|\n')
+            f.write(f'| **{passed}** | **{failed}** | **{total}** |\n\n')
+            f.write('</div>\n\n')
+            f.write('---\n\n')
 
-            f.write(f"### Risk Distribution\n\n")
-            f.write(f"| Risk Level | Count |\n")
-            f.write(f"|------------|-------|\n")
+            # ── Device Information ───────────────────────────────────────────
+            f.write('## 🖥️ Device Information\n\n')
+            f.write('| Property | Value |\n')
+            f.write('|:---------|:------|\n')
+            f.write(f'| **Hostname** | `{host}` |\n')
+            f.write(f'| **IP Address** | `{ip}` |\n')
+            f.write(f'| **Platform** | {platform} |\n')
+            f.write(f'| **Model** | {device["model"]} |\n')
+            f.write(f'| **IOS Version** | {device["version"]} |\n')
+            f.write(f'| **Audit Date** | {dt_str} |\n\n')
+
+            # ── Category Scorecard ───────────────────────────────────────────
+            f.write('## 📊 Category Scorecard\n\n')
+            f.write('| Category | Passed | Failed | Score | Status |\n')
+            f.write('|:---------|:------:|:------:|------:|:------:|\n')
+            for cat, counts in categories.items():
+                cat_total = counts['passed'] + counts['failed']
+                cat_score = (counts['passed'] / cat_total * 100) if cat_total > 0 else 0
+                cat_icon = '🟢' if cat_score >= 90 else '🟡' if cat_score >= 75 else '🟠' if cat_score >= 50 else '🔴'
+                f.write(f'| {cat} | {counts["passed"]} | {counts["failed"]} | {cat_score:.0f}% | {cat_icon} |\n')
+            f.write('\n')
+
+            # ── Risk Distribution ────────────────────────────────────────────
+            f.write('## ⚠️ Risk Distribution\n\n')
+            f.write('| Risk Level | Count | Breakdown |\n')
+            f.write('|:-----------|:-----:|:----------|\n')
             for risk in ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW']:
-                if risk_counts[risk] > 0:
-                    f.write(f"| {risk} | {risk_counts[risk]} |\n")
-            f.write(f"\n")
+                count = risk_counts[risk]
+                if count > 0:
+                    f.write(f'| {risk_icons[risk]} &nbsp;**{risk}** | {count} | `{"■" * count}` |\n')
+            f.write('\n---\n\n')
 
-            # Detailed Findings
-            f.write(f"## Detailed Findings\n\n")
+            # ── Detailed Findings ────────────────────────────────────────────
+            f.write('## 🔍 Detailed Findings\n\n')
             if failed_results:
                 for risk_level in ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW']:
                     risk_findings = [r for r in failed_results if r['risk'] == risk_level]
-                    if risk_findings:
-                        f.write(f"### {risk_level} Risk Issues\n\n")
-                        for idx, result in enumerate(risk_findings, 1):
-                            f.write(f"#### {idx}. {result['name']}\n\n")
-                            f.write(f"**Category:** {result['category']}\n\n")
-                            f.write(f"**Impact:**\n{result['impact']}\n\n")
-                            f.write(f"**Recommendation:**\n{result['recommendation']}\n\n")
-                            f.write(f"---\n\n")
+                    if not risk_findings:
+                        continue
+                    plural = 's' if len(risk_findings) != 1 else ''
+                    f.write(f'### {risk_icons[risk_level]} {risk_level} Risk &nbsp;—&nbsp; {len(risk_findings)} issue{plural}\n\n')
+                    for result in risk_findings:
+                        f.write(f'<details>\n')
+                        f.write(f'<summary><strong>{result["name"]}</strong> &nbsp;<em>({result["category"]})</em></summary>\n\n')
+                        f.write(f'**Impact**\n\n')
+                        f.write(f'> {result["impact"]}\n\n')
+                        f.write(f'**Remediation**\n\n')
+                        f.write(f'```\n{result["recommendation"]}\n```\n\n')
+                        f.write(f'</details>\n\n')
+                    f.write('\n')
             else:
-                f.write(f"No security issues detected. All checks passed.\n\n")
+                f.write('> ✅ All checks passed. No issues found.\n\n')
 
-            # Recommendations Summary
-            f.write(f"## Recommendations Summary\n\n")
-            f.write(f"Priority remediation actions based on risk level:\n\n")
-            if risk_counts['CRITICAL'] > 0 or risk_counts['HIGH'] > 0:
-                f.write(f"1. **IMMEDIATE:** Address {risk_counts['CRITICAL']} CRITICAL and {risk_counts['HIGH']} HIGH risk findings\n")
+            f.write('---\n\n')
+
+            # ── What's Working ───────────────────────────────────────────────
+            f.write('## ✅ What\'s Working\n\n')
+            f.write('<details>\n<summary>Show all passed checks</summary>\n\n')
+            f.write('| Check | Category |\n')
+            f.write('|:------|:---------|\n')
+            for result in passed_results:
+                f.write(f'| ✅ {result["name"]} | {result["category"]} |\n')
+            f.write('\n</details>\n\n')
+            f.write('---\n\n')
+
+            # ── Action Plan ──────────────────────────────────────────────────
+            f.write('## 📋 Action Plan\n\n')
+            urgent = risk_counts['CRITICAL'] + risk_counts['HIGH']
+            if urgent > 0:
+                f.write(f'### 🚨 Immediate — This Week\n\n')
+                f.write(f'Address **{urgent}** critical/high risk finding{"s" if urgent != 1 else ""}:\n\n')
+                for r in [r for r in failed_results if r['risk'] in ('CRITICAL', 'HIGH')]:
+                    f.write(f'- [ ] **{r["name"]}** _{r["category"]}_\n')
+                f.write('\n')
             if risk_counts['MEDIUM'] > 0:
-                f.write(f"2. **SHORT-TERM:** Resolve {risk_counts['MEDIUM']} MEDIUM risk findings within 30 days\n")
+                f.write(f'### 🟠 Short-Term — Within 30 Days\n\n')
+                f.write(f'Resolve **{risk_counts["MEDIUM"]}** medium risk findings:\n\n')
+                for r in [r for r in failed_results if r['risk'] == 'MEDIUM']:
+                    f.write(f'- [ ] **{r["name"]}** _{r["category"]}_\n')
+                f.write('\n')
             if risk_counts['LOW'] > 0:
-                f.write(f"3. **PLANNED:** Address {risk_counts['LOW']} LOW risk findings in next maintenance window\n")
-            f.write(f"\n")
+                f.write(f'### 🟡 Planned — Next Maintenance Window\n\n')
+                f.write(f'Address **{risk_counts["LOW"]}** low risk findings:\n\n')
+                for r in [r for r in failed_results if r['risk'] == 'LOW']:
+                    f.write(f'- [ ] **{r["name"]}** _{r["category"]}_\n')
+                f.write('\n')
 
-            # Next Steps
-            f.write(f"## Next Steps\n\n")
-            f.write(f"1. Review the Pre-Deployment Checklist: `PRE_DEPLOYMENT_CHECKLIST_{report_data['device_info']['ip_address']}-{timestamp}.md`\n")
-            f.write(f"2. Review remediation commands: `remediation_commands_{report_data['device_info']['ip_address']}-{timestamp}.txt`\n")
-            f.write(f"3. Schedule maintenance window for critical fixes\n")
-            f.write(f"4. Test remediation commands in lab environment first\n")
-            f.write(f"5. Create change control ticket\n")
-            f.write(f"6. Execute changes with proper backout plan\n")
-            f.write(f"7. Re-run audit to verify compliance improvement\n\n")
+            # ── Next Steps ───────────────────────────────────────────────────
+            f.write('## 🗺️ Next Steps\n\n')
+            f.write(f'1. 📄 Review remediation commands: `remediation_commands_{ip}-{timestamp}.txt`\n')
+            f.write(f'2. ✅ Complete pre-deployment checklist: `PRE_DEPLOYMENT_CHECKLIST_{ip}-{timestamp}.md`\n')
+            f.write(f'3. 🧪 Test all commands in a lab environment first\n')
+            f.write(f'4. 🎫 Raise a change control ticket\n')
+            f.write(f'5. 🔧 Execute changes during a scheduled maintenance window\n')
+            f.write(f'6. 🔄 Re-run audit to verify compliance improvement\n\n')
 
-            f.write(f"---\n\n")
-            f.write(f"*Report generated by Cisco Network Device Hardening Auditor*\n")
+            # ── Footer ───────────────────────────────────────────────────────
+            f.write('---\n\n')
+            f.write('<div align="center">\n\n')
+            f.write(f'*Generated by Cisco Network Device Hardening Auditor &nbsp;·&nbsp; {dt_str}*\n\n')
+            f.write('</div>\n')
 
     def _generate_pre_deployment_checklist(self, filename, report_data, timestamp):
         """Generate PRE_DEPLOYMENT_CHECKLIST markdown file (REQUIRED per CLAUDE.md)"""

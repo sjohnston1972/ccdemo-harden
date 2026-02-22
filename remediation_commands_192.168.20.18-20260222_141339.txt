@@ -1,0 +1,325 @@
+Cisco Network Device Security Remediation Commands
+======================================================================
+
+Device: hostname (192.168.20.18)
+Platform: IOS
+Generated: 2026-02-22 14:13:39
+
+CRITICAL WARNING:
+- Test ALL commands in lab environment first
+- Create configuration backup before making changes
+- Apply changes during maintenance window only
+- Have console access available during implementation
+- Review Pre-Deployment Checklist before proceeding
+
+======================================================================
+
+
+######################################################################
+# HIGH PRIORITY FIXES
+######################################################################
+
+--- HIGH #1: NTP Authentication ---
+
+Category: Management Plane Security
+Impact: Unauthenticated NTP can be spoofed, causing time-based attacks
+
+Configuration Commands:
+configure terminal
+  ntp authenticate, ntp authentication-key, ntp trusted-key
+exit
+!
+! Verification command:
+! show running-config | include ntp
+
+--- HIGH #2: SNMPv3 Security ---
+
+Category: Management Plane Security
+Impact: SNMPv1/v2c community strings transmitted in cleartext
+
+Configuration Commands:
+configure terminal
+  snmp-server user [user] [group] v3 auth sha [pass] priv aes 128 [key]
+exit
+!
+! Verification command:
+! show running-config
+
+--- HIGH #3: Management ACL ---
+
+Category: Management Plane Security
+Impact: Unrestricted management access from any network increases attack surface
+
+Configuration Commands:
+configure terminal
+  access-list [#] permit [mgmt-network], line vty 0 15 
+   access-class [#] in
+exit
+!
+! Verification command:
+! show running-config
+
+--- HIGH #4: HTTP Server Disabled ---
+
+Category: Service Hardening
+Impact: HTTP server provides unauthenticated access to device information
+
+Configuration Commands:
+configure terminal
+  no ip http server
+exit
+!
+! Verification command:
+! show running-config
+
+--- HIGH #5: DHCP Snooping ---
+
+Category: Network Security Features
+Impact: Rogue DHCP servers can redirect traffic and perform MITM attacks
+
+Configuration Commands:
+configure terminal
+  ip dhcp snooping, ip dhcp snooping vlan [vlan-range]
+exit
+!
+! Verification command:
+! show ip dhcp snooping
+
+--- HIGH #6: Dynamic ARP Inspection ---
+
+Category: Network Security Features
+Impact: ARP spoofing enables man-in-the-middle attacks
+
+Configuration Commands:
+configure terminal
+  ip arp inspection vlan [vlan-range]
+exit
+!
+! Verification command:
+! show ip arp inspection
+
+--- HIGH #7: BPDU Guard ---
+
+Category: Network Security Features
+Impact: Rogue switches can cause spanning-tree topology manipulation
+
+Configuration Commands:
+configure terminal
+  spanning-tree portfast bpduguard default
+exit
+!
+! Verification command:
+! show running-config
+
+--- HIGH #8: Control Plane Policing ---
+
+Category: Control Plane Security
+Impact: Control plane vulnerable to DoS attacks affecting device stability
+
+Configuration Commands:
+configure terminal
+  control-plane, service-policy input [policy-name]
+exit
+!
+! Verification command:
+! show running-config
+
+--- HIGH #9: AAA Authentication ---
+
+Category: AAA Configuration
+Impact: No centralized authentication policy enforced
+
+Configuration Commands:
+configure terminal
+  aaa authentication login default group tacacs+ local
+exit
+!
+! Verification command:
+! show running-config
+
+
+######################################################################
+# MEDIUM PRIORITY FIXES
+######################################################################
+
+--- MEDIUM #1: SSH Authentication Retries Limited ---
+
+Category: Access Security
+Impact: Unlimited retries enable password guessing attacks
+
+Configuration Commands:
+configure terminal
+  ip ssh authentication-retries 3
+exit
+!
+! Verification command:
+! show running-config
+
+--- MEDIUM #2: Syslog Configuration ---
+
+Category: Management Plane Security
+Impact: Without centralized logging, security events may go undetected
+
+Configuration Commands:
+configure terminal
+  logging host [syslog-server], logging trap informational
+exit
+!
+! Verification command:
+! show running-config
+
+--- MEDIUM #3: HTTPS Server Status ---
+
+Category: Service Hardening
+Impact: If HTTPS not required for management, disable to reduce attack surface
+
+Configuration Commands:
+configure terminal
+  no ip http secure-server (unless required)
+exit
+!
+! Verification command:
+! show running-config
+
+--- MEDIUM #4: CDP Global Status ---
+
+Category: Service Hardening
+Impact: CDP discloses device information to potential attackers on local network
+
+Configuration Commands:
+configure terminal
+  no cdp run (or disable per-interface on untrusted ports)
+exit
+!
+! Verification command:
+! show running-config
+
+--- MEDIUM #5: Source Routing Disabled ---
+
+Category: Service Hardening
+Impact: Source routing can be used to bypass network security controls
+
+Configuration Commands:
+configure terminal
+  no ip source-route
+exit
+!
+! Verification command:
+! show running-config
+
+--- MEDIUM #6: Loop Guard ---
+
+Category: Network Security Features
+Impact: Unidirectional link failures can cause forwarding loops
+
+Configuration Commands:
+configure terminal
+  spanning-tree loopguard default
+exit
+!
+! Verification command:
+! show running-config
+
+--- MEDIUM #7: TACACS+ Configuration ---
+
+Category: AAA Configuration
+Impact: Local authentication only, no centralized identity management
+
+Configuration Commands:
+configure terminal
+  tacacs server [name], address ipv4 [ip]
+exit
+!
+! Verification command:
+! show running-config
+
+
+######################################################################
+# LOW PRIORITY FIXES
+######################################################################
+
+--- LOW #1: Login Banner Configured ---
+
+Category: Access Security
+Impact: Legal warning banners establish unauthorized access policy
+
+Configuration Commands:
+configure terminal
+  banner login # [warning message] #
+exit
+!
+! Verification command:
+! show running-config | begin banner
+
+--- LOW #2: Finger Service Disabled ---
+
+Category: Service Hardening
+Impact: Finger service can leak user information
+
+Configuration Commands:
+configure terminal
+  no ip finger
+exit
+!
+! Verification command:
+! show running-config
+
+--- LOW #3: PAD Service Disabled ---
+
+Category: Service Hardening
+Impact: PAD service is legacy and rarely needed
+
+Configuration Commands:
+configure terminal
+  no service pad
+exit
+!
+! Verification command:
+! show running-config
+
+
+######################################################################
+# POST-CONFIGURATION VERIFICATION
+######################################################################
+
+! Execute these commands to verify changes:
+
+show running-config | section line vty
+show ip ssh
+show running-config | include aaa
+show running-config | include ntp
+show running-config | include logging
+show running-config | include snmp
+show running-config | section control-plane
+show ip dhcp snooping
+show ip arp inspection
+show spanning-tree summary
+
+
+######################################################################
+# SAVE CONFIGURATION
+######################################################################
+
+! After verifying all changes:
+copy running-config startup-config
+
+
+######################################################################
+# ROLLBACK COMMANDS (if needed)
+######################################################################
+
+! Emergency rollback to previous configuration:
+configure replace flash:backup-config force
+
+! Or restore from startup-config:
+copy startup-config running-config
+
+! Manual rollback (undo specific changes):
+configure terminal
+  ! Use 'no' commands to reverse changes
+  ! Example: no service password-encryption
+exit
+
+======================================================================
+End of Remediation Commands
+======================================================================
